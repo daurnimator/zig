@@ -365,6 +365,61 @@ pub fn Log2Int(comptime T: type) type {
     return @IntType(false, count);
 }
 
+pub fn IntFitting(comptime is_signed: bool, comptime x: comptime_int) type {
+    if (x == 0) {
+        return @IntType(is_signed, 0);
+    }
+    const base = log2(x);
+    var upper = (1 << base);
+    if (x > 0) {
+        upper -= 1;
+    }
+    var magnitude_bits = if (upper >= x) base else base + 1;
+    if (is_signed) {
+        magnitude_bits += 1;
+    }
+    return @IntType(is_signed, magnitude_bits);
+
+}
+
+test "math.IntFitting" {
+    assert(IntFitting(false, 0) == u0);
+    assert(IntFitting(false, 1) == u1);
+    assert(IntFitting(false, 2) == u2);
+    assert(IntFitting(false, 3) == u2);
+    assert(IntFitting(false, 4) == u3);
+    assert(IntFitting(false, 7) == u3);
+    assert(IntFitting(false, 8) == u4);
+    assert(IntFitting(false, 9) == u4);
+    assert(IntFitting(false, 15) == u4);
+    assert(IntFitting(false, 16) == u5);
+    assert(IntFitting(false, 17) == u5);
+    assert(IntFitting(false, 4095) == u12);
+    assert(IntFitting(false, 4096) == u13);
+    assert(IntFitting(false, 4097) == u13);
+    assert(IntFitting(false, 123456789123456798123456789) == u87);
+    assert(IntFitting(false, 123456789123456798123456789123456789123456798123456789) == u177);
+
+    assert(IntFitting(true, 0) == i0);
+    assert(IntFitting(true, -1) == i1);
+    assert(IntFitting(true, 1) == i2);
+    assert(IntFitting(true, -2) == i2);
+    assert(IntFitting(true, 2) == i3);
+    assert(IntFitting(true, 3) == i3);
+    assert(IntFitting(true, 4) == i4);
+    assert(IntFitting(true, 7) == i4);
+    assert(IntFitting(true, 8) == i5);
+    assert(IntFitting(true, 9) == i5);
+    assert(IntFitting(true, 15) == i5);
+    assert(IntFitting(true, 16) == i6);
+    assert(IntFitting(true, 17) == i6);
+    assert(IntFitting(true, 4095) == i13);
+    assert(IntFitting(true, 4096) == i14);
+    assert(IntFitting(true, 4097) == i14);
+    assert(IntFitting(true, 123456789123456798123456789) == i88);
+    assert(IntFitting(true, 123456789123456798123456789123456789123456798123456789) == i178);
+}
+
 test "math overflow functions" {
     testOverflow();
     comptime testOverflow();
