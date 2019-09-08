@@ -917,7 +917,6 @@ fn cmdInternalBuildInfo(allocator: *Allocator, args: []const []const u8) !void {
         \\ZIG_LLVM_CONFIG_EXE  {}
         \\ZIG_LLD_INCLUDE_PATH {}
         \\ZIG_LLD_LIBRARIES    {}
-        \\ZIG_STD_FILES        {}
         \\ZIG_C_HEADER_FILES   {}
         \\ZIG_DIA_GUIDS_LIB    {}
         \\
@@ -927,7 +926,6 @@ fn cmdInternalBuildInfo(allocator: *Allocator, args: []const []const u8) !void {
         std.mem.toSliceConst(u8, c.ZIG_LLVM_CONFIG_EXE),
         std.mem.toSliceConst(u8, c.ZIG_LLD_INCLUDE_PATH),
         std.mem.toSliceConst(u8, c.ZIG_LLD_LIBRARIES),
-        std.mem.toSliceConst(u8, c.ZIG_STD_FILES),
         std.mem.toSliceConst(u8, c.ZIG_C_HEADER_FILES),
         std.mem.toSliceConst(u8, c.ZIG_DIA_GUIDS_LIB),
     );
