@@ -733,7 +733,7 @@ pub const Builder = struct {
 
     ///`dest_rel_path` is relative to prefix path
     pub fn installFile(self: *Builder, src_path: []const u8, dest_rel_path: []const u8) void {
-        self.getInstallStep().dependOn(&self.addInstallFileWithDir(src_path, .Prefix, dest_rel_path).step);
+        self.getInstallStep().dependOn(&self.addInstallFile(src_path, dest_rel_path).step);
     }
 
     pub fn installDirectory(self: *Builder, options: InstallDirectoryOptions) void {
@@ -742,12 +742,12 @@ pub const Builder = struct {
 
     ///`dest_rel_path` is relative to bin path
     pub fn installBinFile(self: *Builder, src_path: []const u8, dest_rel_path: []const u8) void {
-        self.getInstallStep().dependOn(&self.addInstallFileWithDir(src_path, .Bin, dest_rel_path).step);
+        self.getInstallStep().dependOn(&self.addInstallBinFile(src_path, dest_rel_path).step);
     }
 
     ///`dest_rel_path` is relative to lib path
     pub fn installLibFile(self: *Builder, src_path: []const u8, dest_rel_path: []const u8) void {
-        self.getInstallStep().dependOn(&self.addInstallFileWithDir(src_path, .Lib, dest_rel_path).step);
+        self.getInstallStep().dependOn(&self.addInstallLibFile(src_path, dest_rel_path).step);
     }
 
     ///`dest_rel_path` is relative to install prefix path
