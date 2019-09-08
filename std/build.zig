@@ -19,6 +19,7 @@ const File = std.fs.File;
 pub const FmtStep = @import("build/fmt.zig").FmtStep;
 
 pub const Builder = struct {
+    build_tls: TopLevelStep,
     install_tls: TopLevelStep,
     uninstall_tls: TopLevelStep,
     allocator: *Allocator,
@@ -132,6 +133,10 @@ pub const Builder = struct {
             .install_prefix = null,
             .lib_dir = undefined,
             .exe_dir = undefined,
+            .build_tls = TopLevelStep{
+                .step = Step.initNoOp("build", allocator),
+                .description = "Compile build artifacts",
+            },
             .dest_dir = env_map.get("DESTDIR"),
             .installed_files = ArrayList(InstalledFile).init(allocator),
             .install_tls = TopLevelStep{
@@ -148,6 +153,8 @@ pub const Builder = struct {
             .override_lib_dir = null,
             .install_path = undefined,
         };
+        self.install_tls.step.dependOn(&self.build_tls.step);
+        try self.top_level_steps.append(&self.build_tls);
         try self.top_level_steps.append(&self.install_tls);
         try self.top_level_steps.append(&self.uninstall_tls);
         self.detectNativeSystemPaths();
@@ -300,6 +307,10 @@ pub const Builder = struct {
         for (wanted_steps.toSliceConst()) |s| {
             try self.makeOneStep(s);
         }
+    }
+
+    pub fn getBuildStep(self: *Builder) *Step {
+        return &self.build_tls.step;
     }
 
     pub fn getInstallStep(self: *Builder) *Step {

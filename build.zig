@@ -78,7 +78,7 @@ pub fn build(b: *Builder) !void {
 
     const only_install_lib_files = b.option(bool, "lib-files-only", "Only install library files") orelse false;
     if (!only_install_lib_files) {
-        b.default_step.dependOn(&exe.step);
+        b.getBuildStep().dependOn(&exe.step);
         exe.install();
     }
 
