@@ -87,22 +87,13 @@ pub fn BufferedInStreamCustom(comptime buffer_size: usize, comptime Error: type)
 
         unbuffered_in_stream: *Stream,
 
-        buffer: [buffer_size]u8,
-        start_index: usize,
-        end_index: usize,
+        const FifoType = std.fifo.LinearFifo(u8, std.fifo.LinearFifoBufferType{ .Static = buffer_size });
+        fifo: FifoType,
 
         pub fn init(unbuffered_in_stream: *Stream) Self {
             return Self{
                 .unbuffered_in_stream = unbuffered_in_stream,
-                .buffer = undefined,
-
-                // Initialize these two fields to buffer_size so that
-                // in `readFn` we treat the state as being able to read
-                // more from the unbuffered stream. If we set them to 0
-                // and 0, the code would think we already hit EOF.
-                .start_index = buffer_size,
-                .end_index = buffer_size,
-
+                .fifo = FifoType.init(),
                 .stream = Stream{ .readFn = readFn },
             };
         }
@@ -111,38 +102,23 @@ pub fn BufferedInStreamCustom(comptime buffer_size: usize, comptime Error: type)
             const self = @fieldParentPtr(Self, "stream", in_stream);
 
             var dest_index: usize = 0;
-            while (true) {
-                const dest_space = dest.len - dest_index;
-                if (dest_space == 0) {
-                    return dest_index;
-                }
-                const amt_buffered = self.end_index - self.start_index;
-                if (amt_buffered == 0) {
-                    assert(self.end_index <= buffer_size);
-                    // Make sure the last read actually gave us some data
-                    if (self.end_index == 0) {
+            while (dest_index < dest.len) {
+                const written = self.fifo.read(dest[dest_index..]);
+                if (written == 0) {
+                    // fifo empty, fill it
+                    const writable = self.fifo.writableSlice(0);
+                    assert(writable.len > 0);
+                    const n = try self.unbuffered_in_stream.read(writable);
+                    if (n == 0) {
                         // reading from the unbuffered stream returned nothing
                         // so we have nothing left to read.
                         return dest_index;
                     }
-                    // we can read more data from the unbuffered stream
-                    if (dest_space < buffer_size) {
-                        self.start_index = 0;
-                        self.end_index = try self.unbuffered_in_stream.read(self.buffer[0..]);
-                    } else {
-                        // asking for so much data that buffering is actually less efficient.
-                        // forward the request directly to the unbuffered stream
-                        const amt_read = try self.unbuffered_in_stream.read(dest[dest_index..]);
-                        return dest_index + amt_read;
-                    }
+                    self.fifo.update(n);
                 }
-
-                const copy_amount = math.min(dest_space, amt_buffered);
-                const copy_end_index = self.start_index + copy_amount;
-                mem.copy(u8, dest[dest_index..], self.buffer[self.start_index..copy_end_index]);
-                self.start_index = copy_end_index;
-                dest_index += copy_amount;
+                dest_index += written;
             }
+            return dest.len;
         }
     };
 }
