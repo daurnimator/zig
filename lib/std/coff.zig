@@ -56,32 +56,29 @@ pub const Coff = struct {
     pub fn loadHeader(self: *Coff) !void {
         const pe_pointer_offset = 0x3C;
 
-        var file_stream = self.in_file.inStream();
-        const in = &file_stream.stream;
-
         var magic: [2]u8 = undefined;
-        try in.readNoEof(magic[0..]);
+        try self.in_file.readNoEof(magic[0..]);
         if (!mem.eql(u8, &magic, "MZ"))
             return error.InvalidPEMagic;
 
         // Seek to PE File Header (coff header)
         try self.in_file.seekTo(pe_pointer_offset);
-        const pe_magic_offset = try in.readIntLittle(u32);
+        const pe_magic_offset = try self.in_file.readIntLittle(u32);
         try self.in_file.seekTo(pe_magic_offset);
 
         var pe_header_magic: [4]u8 = undefined;
-        try in.readNoEof(pe_header_magic[0..]);
-        if (!mem.eql(u8, &pe_header_magic, &[_]u8{ 'P', 'E', 0, 0 }))
+        try self.in_file.readNoEof(pe_header_magic[0..]);
+        if (!mem.eql(u8, &pe_header_magic, [_]u8{ 'P', 'E', 0, 0 }))
             return error.InvalidPEHeader;
 
         self.coff_header = CoffHeader{
-            .machine = try in.readIntLittle(u16),
-            .number_of_sections = try in.readIntLittle(u16),
-            .timedate_stamp = try in.readIntLittle(u32),
-            .pointer_to_symbol_table = try in.readIntLittle(u32),
-            .number_of_symbols = try in.readIntLittle(u32),
-            .size_of_optional_header = try in.readIntLittle(u16),
-            .characteristics = try in.readIntLittle(u16),
+            .machine = try self.in_file.readIntLittle(u16),
+            .number_of_sections = try self.in_file.readIntLittle(u16),
+            .timedate_stamp = try self.in_file.readIntLittle(u32),
+            .pointer_to_symbol_table = try self.in_file.readIntLittle(u32),
+            .number_of_symbols = try self.in_file.readIntLittle(u32),
+            .size_of_optional_header = try self.in_file.readIntLittle(u16),
+            .characteristics = try self.in_file.readIntLittle(u16),
         };
 
         switch (self.coff_header.machine) {
@@ -89,12 +86,11 @@ pub const Coff = struct {
             else => return error.InvalidMachine,
         }
 
-        try self.loadOptionalHeader(&file_stream);
+        try self.loadOptionalHeader();
     }
 
-    fn loadOptionalHeader(self: *Coff, file_stream: *File.InStream) !void {
-        const in = &file_stream.stream;
-        self.pe_header.magic = try in.readIntLittle(u16);
+    fn loadOptionalHeader(self: *Coff) !void {
+        self.pe_header.magic = try self.in_file.readIntLittle(u16);
         // For now we're only interested in finding the reference to the .pdb,
         // so we'll skip most of this header, which size is different in 32
         // 64 bits by the way.
@@ -108,14 +104,14 @@ pub const Coff = struct {
 
         try self.in_file.seekBy(skip_size);
 
-        const number_of_rva_and_sizes = try in.readIntLittle(u32);
+        const number_of_rva_and_sizes = try self.in_file.readIntLittle(u32);
         if (number_of_rva_and_sizes != IMAGE_NUMBEROF_DIRECTORY_ENTRIES)
             return error.InvalidPEHeader;
 
         for (self.pe_header.data_directory) |*data_dir| {
             data_dir.* = OptionalHeader.DataDirectory{
-                .virtual_address = try in.readIntLittle(u32),
-                .size = try in.readIntLittle(u32),
+                .virtual_address = try self.in_file.readIntLittle(u32),
+                .size = try self.in_file.readIntLittle(u32),
             };
         }
     }
@@ -136,8 +132,6 @@ pub const Coff = struct {
         const debug_dir = &self.pe_header.data_directory[DEBUG_DIRECTORY];
         const file_offset = debug_dir.virtual_address - header.virtual_address + header.pointer_to_raw_data;
 
-        var file_stream = self.in_file.inStream();
-        const in = &file_stream.stream;
         try self.in_file.seekTo(file_offset);
 
         // Find the correct DebugDirectoryEntry, and where its data is stored.
@@ -145,7 +139,7 @@ pub const Coff = struct {
         const debug_dir_entry_count = debug_dir.size / @sizeOf(DebugDirectoryEntry);
         var i: u32 = 0;
         blk: while (i < debug_dir_entry_count) : (i += 1) {
-            const debug_dir_entry = try in.readStruct(DebugDirectoryEntry);
+            const debug_dir_entry = try self.in_file.readStruct(DebugDirectoryEntry);
             if (debug_dir_entry.type == IMAGE_DEBUG_TYPE_CODEVIEW) {
                 for (self.sections.toSlice()) |*section| {
                     const section_start = section.header.virtual_address;
@@ -161,19 +155,19 @@ pub const Coff = struct {
         }
 
         var cv_signature: [4]u8 = undefined; // CodeView signature
-        try in.readNoEof(cv_signature[0..]);
+        try self.in_file.readNoEof(cv_signature[0..]);
         // 'RSDS' indicates PDB70 format, used by lld.
         if (!mem.eql(u8, &cv_signature, "RSDS"))
             return error.InvalidPEMagic;
-        try in.readNoEof(self.guid[0..]);
-        self.age = try in.readIntLittle(u32);
+        try self.in_file.readNoEof(self.guid[0..]);
+        self.age = try self.in_file.readIntLittle(u32);
 
         // Finally read the null-terminated string.
-        var byte = try in.readByte();
+        var byte = try self.in_file.readByte();
         i = 0;
         while (byte != 0 and i < buffer.len) : (i += 1) {
             buffer[i] = byte;
-            byte = try in.readByte();
+            byte = try self.in_file.readByte();
         }
 
         if (byte != 0 and i == buffer.len)
@@ -188,26 +182,23 @@ pub const Coff = struct {
 
         try self.sections.ensureCapacity(self.coff_header.number_of_sections);
 
-        var file_stream = self.in_file.inStream();
-        const in = &file_stream.stream;
-
         var name: [8]u8 = undefined;
 
         var i: u16 = 0;
         while (i < self.coff_header.number_of_sections) : (i += 1) {
-            try in.readNoEof(name[0..]);
+            try self.in_file.readNoEof(name[0..]);
             try self.sections.append(Section{
                 .header = SectionHeader{
                     .name = name,
-                    .misc = SectionHeader.Misc{ .virtual_size = try in.readIntLittle(u32) },
-                    .virtual_address = try in.readIntLittle(u32),
-                    .size_of_raw_data = try in.readIntLittle(u32),
-                    .pointer_to_raw_data = try in.readIntLittle(u32),
-                    .pointer_to_relocations = try in.readIntLittle(u32),
-                    .pointer_to_line_numbers = try in.readIntLittle(u32),
-                    .number_of_relocations = try in.readIntLittle(u16),
-                    .number_of_line_numbers = try in.readIntLittle(u16),
-                    .characteristics = try in.readIntLittle(u32),
+                    .misc = SectionHeader.Misc{ .virtual_size = try self.in_file.readIntLittle(u32) },
+                    .virtual_address = try self.in_file.readIntLittle(u32),
+                    .size_of_raw_data = try self.in_file.readIntLittle(u32),
+                    .pointer_to_raw_data = try self.in_file.readIntLittle(u32),
+                    .pointer_to_relocations = try self.in_file.readIntLittle(u32),
+                    .pointer_to_line_numbers = try self.in_file.readIntLittle(u32),
+                    .number_of_relocations = try self.in_file.readIntLittle(u16),
+                    .number_of_line_numbers = try self.in_file.readIntLittle(u16),
+                    .characteristics = try self.in_file.readIntLittle(u32),
                 },
             });
         }

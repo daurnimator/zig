@@ -821,7 +821,7 @@ fn linuxLookupNameFromHosts(
     };
     defer file.close();
 
-    const stream = &std.io.BufferedInStream(fs.File.ReadError).init(&file.inStream().stream).stream;
+    var stream = std.io.BufferedInStream(fs.File).init(file);
     var line_buf: [512]u8 = undefined;
     while (stream.readUntilDelimiterOrEof(&line_buf, '\n') catch |err| switch (err) {
         error.StreamTooLong => blk: {
@@ -1015,7 +1015,7 @@ fn getResolvConf(allocator: *mem.Allocator, rc: *ResolvConf) !void {
     };
     defer file.close();
 
-    const stream = &std.io.BufferedInStream(fs.File.ReadError).init(&file.inStream().stream).stream;
+    var stream = std.io.BufferedInStream(fs.File).init(file);
     var line_buf: [512]u8 = undefined;
     while (stream.readUntilDelimiterOrEof(&line_buf, '\n') catch |err| switch (err) {
         error.StreamTooLong => blk: {

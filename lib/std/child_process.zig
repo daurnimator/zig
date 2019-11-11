@@ -197,11 +197,8 @@ pub const ChildProcess = struct {
         defer Buffer.deinit(&stdout);
         defer Buffer.deinit(&stderr);
 
-        var stdout_file_in_stream = child.stdout.?.inStream();
-        var stderr_file_in_stream = child.stderr.?.inStream();
-
-        try stdout_file_in_stream.stream.readAllBuffer(&stdout, max_output_size);
-        try stderr_file_in_stream.stream.readAllBuffer(&stderr, max_output_size);
+        try child.stdout.stream.readAllBuffer(&stdout, max_output_size);
+        try child.stderr.stream.readAllBuffer(&stderr, max_output_size);
 
         return ExecResult{
             .term = try child.wait(),
@@ -791,8 +788,7 @@ fn writeIntFd(fd: i32, value: ErrInt) !void {
 }
 
 fn readIntFd(fd: i32) !ErrInt {
-    const stream = &File.openHandle(fd).inStream().stream;
-    return stream.readIntNative(ErrInt) catch return error.SystemResources;
+    return File.openHandle(fd).readIntNative(ErrInt) catch return error.SystemResources;
 }
 
 /// Caller must free result.

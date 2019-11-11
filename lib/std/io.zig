@@ -58,7 +58,7 @@ pub fn getStdIn() File {
 pub const SeekableStream = @import("io/seekable_stream.zig").SeekableStream;
 pub const SliceSeekableInStream = @import("io/seekable_stream.zig").SliceSeekableInStream;
 pub const COutStream = @import("io/c_out_stream.zig").COutStream;
-pub const InStream = @import("io/in_stream.zig").InStream;
+pub usingnamespace @import("io/in_stream.zig");
 pub const OutStream = @import("io/out_stream.zig").OutStream;
 
 /// Deprecated; use `std.fs.Dir.writeFile`.
@@ -71,33 +71,30 @@ pub fn readFileAlloc(allocator: *mem.Allocator, path: []const u8) ![]u8 {
     return fs.cwd().readFileAlloc(allocator, path, math.maxInt(usize));
 }
 
-pub fn BufferedInStream(comptime Error: type) type {
-    return BufferedInStreamCustom(mem.page_size, Error);
+pub fn BufferedInStream(comptime UnbufferedInStream: type) type {
+    return BufferedInStreamCustom(mem.page_size, UnbufferedInStream);
 }
 
-pub fn BufferedInStreamCustom(comptime buffer_size: usize, comptime Error: type) type {
+pub fn BufferedInStreamCustom(comptime buffer_size: usize, comptime UnbufferedInStream: type) type {
     return struct {
         const Self = @This();
         const Stream = InStream(Error);
 
-        stream: Stream,
-
-        unbuffered_in_stream: *Stream,
+        unbuffered_in_stream: UnbufferedInStream,
 
         const FifoType = std.fifo.LinearFifo(u8, std.fifo.LinearFifoBufferType{ .Static = buffer_size });
         fifo: FifoType,
 
-        pub fn init(unbuffered_in_stream: *Stream) Self {
+        pub fn init(unbuffered_in_stream: UnbufferedInStream) Self {
             return Self{
                 .unbuffered_in_stream = unbuffered_in_stream,
                 .fifo = FifoType.init(),
-                .stream = Stream{ .readFn = readFn },
             };
         }
 
-        fn readFn(in_stream: *Stream, dest: []u8) !usize {
-            const self = @fieldParentPtr(Self, "stream", in_stream);
+        pub const ReadError = InStreamError(UnbufferedInStream);
 
+        pub fn read(self: *Self, dest: []u8) ReadError!usize {
             var dest_index: usize = 0;
             while (dest_index < dest.len) {
                 const written = self.fifo.read(dest[dest_index..]);
@@ -117,28 +114,28 @@ pub fn BufferedInStreamCustom(comptime buffer_size: usize, comptime Error: type)
             }
             return dest.len;
         }
+
+        pub usingnamespace InStream(Self);
     };
 }
 
 test "io.BufferedInStream" {
     const OneByteReadInStream = struct {
-        const Error = error{NoError};
-        const Stream = InStream(Error);
+        const Self = @This();
 
-        stream: Stream,
         str: []const u8,
         curr: usize,
 
-        fn init(str: []const u8) @This() {
-            return @This(){
-                .stream = Stream{ .readFn = readFn },
+        fn init(str: []const u8) Self {
+            return Self{
                 .str = str,
                 .curr = 0,
             };
         }
 
-        fn readFn(in_stream: *Stream, dest: []u8) Error!usize {
-            const self = @fieldParentPtr(@This(), "stream", in_stream);
+        pub const ReadError = error{};
+
+        pub fn read(self: *Self, dest: []u8) ReadError!usize {
             if (self.str.len <= self.curr or dest.len == 0)
                 return 0;
 
@@ -146,6 +143,8 @@ test "io.BufferedInStream" {
             self.curr += 1;
             return 1;
         }
+
+        pub usingnamespace InStream(Self);
     };
 
     var buf: [100]u8 = undefined;
@@ -153,8 +152,7 @@ test "io.BufferedInStream" {
 
     const str = "This is a test";
     var one_byte_stream = OneByteReadInStream.init(str);
-    var buf_in_stream = BufferedInStream(OneByteReadInStream.Error).init(&one_byte_stream.stream);
-    const stream = &buf_in_stream.stream;
+    var stream = BufferedInStream(*OneByteReadInStream).init(&one_byte_stream);
 
     const res = try stream.readAllAlloc(allocator, str.len + 1);
     testing.expectEqualSlices(u8, str, res);
@@ -162,43 +160,37 @@ test "io.BufferedInStream" {
 
 /// Creates a stream which supports 'un-reading' data, so that it can be read again.
 /// This makes look-ahead style parsing much easier.
-pub fn PeekStream(comptime buffer_type: std.fifo.LinearFifoBufferType, comptime InStreamError: type) type {
+pub fn PeekStream(comptime buffer_type: std.fifo.LinearFifoBufferType, comptime BaseStream: type) type {
     return struct {
         const Self = @This();
-        pub const Error = InStreamError;
-        pub const Stream = InStream(Error);
 
-        stream: Stream,
-        base: *Stream,
+        base: BaseStream,
 
         const FifoType = std.fifo.LinearFifo(u8, buffer_type);
         fifo: FifoType,
 
         pub usingnamespace switch (buffer_type) {
             .Static => struct {
-                pub fn init(base: *Stream) Self {
+                pub fn init(base: BaseStream) Self {
                     return .{
                         .base = base,
                         .fifo = FifoType.init(),
-                        .stream = Stream{ .readFn = readFn },
                     };
                 }
             },
             .Slice => struct {
-                pub fn init(base: *Stream, buf: []u8) Self {
+                pub fn init(base: BaseStream, buf: []u8) Self {
                     return .{
                         .base = base,
                         .fifo = FifoType.init(buf),
-                        .stream = Stream{ .readFn = readFn },
                     };
                 }
             },
             .Dynamic => struct {
-                pub fn init(base: *Stream, allocator: *mem.Allocator) Self {
+                pub fn init(base: BaseStream, allocator: *mem.Allocator) Self {
                     return .{
                         .base = base,
                         .fifo = FifoType.init(allocator),
-                        .stream = Stream{ .readFn = readFn },
                     };
                 }
             },
@@ -212,9 +204,9 @@ pub fn PeekStream(comptime buffer_type: std.fifo.LinearFifoBufferType, comptime 
             try self.fifo.unget(bytes);
         }
 
-        fn readFn(in_stream: *Stream, dest: []u8) Error!usize {
-            const self = @fieldParentPtr(Self, "stream", in_stream);
+        pub const ReadError = InStreamError(BaseStream);
 
+        pub fn read(self: *Self, dest: []u8) ReadError!usize {
             // copy over anything putBack()'d
             var dest_index = self.fifo.read(dest);
             if (dest_index == dest.len) return dest_index;
@@ -223,15 +215,13 @@ pub fn PeekStream(comptime buffer_type: std.fifo.LinearFifoBufferType, comptime 
             dest_index += try self.base.read(dest[dest_index..]);
             return dest_index;
         }
+
+        pub usingnamespace InStream(Self);
     };
 }
 
 pub const SliceInStream = struct {
     const Self = @This();
-    pub const Error = error{};
-    pub const Stream = InStream(Error);
-
-    stream: Stream,
 
     pos: usize,
     slice: []const u8,
@@ -240,12 +230,12 @@ pub const SliceInStream = struct {
         return Self{
             .slice = slice,
             .pos = 0,
-            .stream = Stream{ .readFn = readFn },
         };
     }
 
-    fn readFn(in_stream: *Stream, dest: []u8) Error!usize {
-        const self = @fieldParentPtr(Self, "stream", in_stream);
+    pub const ReadError = error{};
+
+    pub fn read(self: *Self, dest: []u8) ReadError!usize {
         const size = math.min(dest.len, self.slice.len - self.pos);
         const end = self.pos + size;
 
@@ -254,29 +244,30 @@ pub const SliceInStream = struct {
 
         return size;
     }
+
+    pub usingnamespace InStream(Self);
 };
 
 /// Creates a stream which allows for reading bit fields from another stream
-pub fn BitInStream(endian: builtin.Endian, comptime Error: type) type {
+pub fn BitInStream(endian: builtin.Endian, comptime BaseStream: type) type {
     return struct {
         const Self = @This();
 
-        in_stream: *Stream,
+        in_stream: BaseStream,
         bit_buffer: u7,
         bit_count: u3,
-        stream: Stream,
 
-        pub const Stream = InStream(Error);
         const u8_bit_count = comptime meta.bitCount(u8);
         const u7_bit_count = comptime meta.bitCount(u7);
         const u4_bit_count = comptime meta.bitCount(u4);
 
-        pub fn init(in_stream: *Stream) Self {
+        pub const ReadError = InStreamError(BaseStream);
+
+        pub fn init(in_stream: BaseStream) Self {
             return Self{
                 .in_stream = in_stream,
                 .bit_buffer = 0,
                 .bit_count = 0,
-                .stream = Stream{ .readFn = read },
             };
         }
 
@@ -293,7 +284,7 @@ pub fn BitInStream(endian: builtin.Endian, comptime Error: type) type {
         /// Reads `bits` bits from the stream and returns a specified unsigned int type
         ///  containing them in the least significant end. The number of bits successfully
         ///  read is placed in `out_bits`, as reaching the end of the stream is not an error.
-        pub fn readBits(self: *Self, comptime U: type, bits: usize, out_bits: *usize) Error!U {
+        pub fn readBits(self: *Self, comptime U: type, bits: usize, out_bits: *usize) ReadError!U {
             comptime assert(trait.isUnsignedInt(U));
 
             //by extending the buffer to a minimum of u8 we can cover a number of edge cases
@@ -338,7 +329,7 @@ pub fn BitInStream(endian: builtin.Endian, comptime Error: type) type {
                     }
                     //@BUG: See #1810. Not sure if the bug is that I have to do this for some
                     // streams, or that I don't for streams with emtpy errorsets.
-                    return @errSetCast(Error, err);
+                    return @errSetCast(ReadError, err);
                 };
 
                 switch (endian) {
@@ -383,9 +374,7 @@ pub fn BitInStream(endian: builtin.Endian, comptime Error: type) type {
             self.bit_count = 0;
         }
 
-        pub fn read(self_stream: *Stream, buffer: []u8) Error!usize {
-            var self = @fieldParentPtr(Self, "stream", self_stream);
-
+        pub fn read(self: *Self, buffer: []u8) ReadError!usize {
             var out_bits: usize = undefined;
             var out_bits_total = @as(usize, 0);
             //@NOTE: I'm not sure this is a good idea, maybe alignToByte should be forced
@@ -400,6 +389,8 @@ pub fn BitInStream(endian: builtin.Endian, comptime Error: type) type {
 
             return self.in_stream.read(buffer);
         }
+
+        pub usingnamespace InStream(Self);
     };
 }
 
@@ -758,8 +749,7 @@ pub const BufferedAtomicFile = struct {
 };
 
 pub fn readLine(buf: *std.Buffer) ![]u8 {
-    var stdin_stream = getStdIn().inStream();
-    return readLineFrom(&stdin_stream.stream, buf);
+    return readLineFrom(getStdIn(), buf);
 }
 
 /// Reads all characters until the next newline into buf, and returns
@@ -785,22 +775,20 @@ test "io.readLineFrom" {
     const allocator = &std.heap.FixedBufferAllocator.init(bytes[0..]).allocator;
 
     var buf = try std.Buffer.initSize(allocator, 0);
-    var mem_stream = SliceInStream.init(
+    var stream = SliceInStream.init(
         \\Line 1
         \\Line 22
         \\Line 333
     );
-    const stream = &mem_stream.stream;
 
-    testing.expectEqualSlices(u8, "Line 1", try readLineFrom(stream, &buf));
-    testing.expectEqualSlices(u8, "Line 22", try readLineFrom(stream, &buf));
-    testing.expectError(error.EndOfStream, readLineFrom(stream, &buf));
+    testing.expectEqualSlices(u8, "Line 1", try readLineFrom(&stream, &buf));
+    testing.expectEqualSlices(u8, "Line 22", try readLineFrom(&stream, &buf));
+    testing.expectError(error.EndOfStream, readLineFrom(&stream, &buf));
     testing.expectEqualSlices(u8, "Line 1Line 22Line 333", buf.toSlice());
 }
 
 pub fn readLineSlice(slice: []u8) ![]u8 {
-    var stdin_stream = getStdIn().inStream();
-    return readLineSliceFrom(&stdin_stream.stream, slice);
+    return readLineSliceFrom(getStdIn(), slice);
 }
 
 /// Reads all characters until the next newline into slice, and returns
@@ -815,15 +803,14 @@ pub fn readLineSliceFrom(stream: var, slice: []u8) ![]u8 {
 
 test "io.readLineSliceFrom" {
     var buf: [7]u8 = undefined;
-    var mem_stream = SliceInStream.init(
+    var stream = SliceInStream.init(
         \\Line 1
         \\Line 22
         \\Line 333
     );
-    const stream = &mem_stream.stream;
 
-    testing.expectEqualSlices(u8, "Line 1", try readLineSliceFrom(stream, buf[0..]));
-    testing.expectError(error.OutOfMemory, readLineSliceFrom(stream, buf[0..]));
+    testing.expectEqualSlices(u8, "Line 1", try readLineSliceFrom(&stream, buf[0..]));
+    testing.expectError(error.OutOfMemory, readLineSliceFrom(&stream, buf[0..]));
 }
 
 pub const Packing = enum {
@@ -843,18 +830,16 @@ pub const Packing = enum {
 ///  which will be called when the deserializer is used to deserialize
 ///  that type. It will pass a pointer to the type instance to deserialize
 ///  into and a pointer to the deserializer struct.
-pub fn Deserializer(comptime endian: builtin.Endian, comptime packing: Packing, comptime Error: type) type {
+pub fn Deserializer(comptime endian: builtin.Endian, comptime packing: Packing, comptime Stream: type) type {
     return struct {
         const Self = @This();
 
-        in_stream: if (packing == .Bit) BitInStream(endian, Stream.Error) else *Stream,
+        in_stream: if (packing == .Bit) BitInStream(endian, Stream) else Stream,
 
-        pub const Stream = InStream(Error);
-
-        pub fn init(in_stream: *Stream) Self {
+        pub fn init(in_stream: Stream) Self {
             return Self{
                 .in_stream = switch (packing) {
-                    .Bit => BitInStream(endian, Stream.Error).init(in_stream),
+                    .Bit => BitInStream(endian, Stream).init(in_stream),
                     .Byte => in_stream,
                 },
             };
@@ -866,7 +851,7 @@ pub fn Deserializer(comptime endian: builtin.Endian, comptime packing: Packing, 
         }
 
         //@BUG: inferred error issue. See: #1386
-        fn deserializeInt(self: *Self, comptime T: type) (Error || error{EndOfStream})!T {
+        fn deserializeInt(self: *Self, comptime T: type) (InStreamError(Stream) || error{EndOfStream})!T {
             comptime assert(trait.is(builtin.TypeId.Int)(T) or trait.is(builtin.TypeId.Float)(T));
 
             const u8_bit_count = 8;
@@ -933,7 +918,7 @@ pub fn Deserializer(comptime endian: builtin.Endian, comptime packing: Packing, 
             if (comptime trait.hasFn("deserialize")(C)) return C.deserialize(ptr, self);
 
             if (comptime trait.isPacked(C) and packing != .Bit) {
-                var packed_deserializer = Deserializer(endian, .Bit, Error).init(self.in_stream);
+                var packed_deserializer = Deserializer(endian, .Bit, Stream).init(self.in_stream);
                 return packed_deserializer.deserializeInto(ptr);
             }
 

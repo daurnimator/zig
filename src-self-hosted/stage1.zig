@@ -198,10 +198,9 @@ fn fmtMain(argc: c_int, argv: [*]const [*:0]const u8) !void {
             process.exit(1);
         }
 
-        const stdin_file = io.getStdIn();
-        var stdin = stdin_file.inStream();
+        const stdin = io.getStdIn();
 
-        const source_code = try stdin.stream.readAllAlloc(allocator, self_hosted_main.max_src_size);
+        const source_code = try stdin.readAllAlloc(allocator, self_hosted_main.max_src_size);
         defer allocator.free(source_code);
 
         const tree = std.zig.parse(allocator, source_code) catch |err| {
