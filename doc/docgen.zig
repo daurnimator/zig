@@ -40,9 +40,7 @@ pub fn main() !void {
     var out_file = try fs.File.openWrite(out_file_name);
     defer out_file.close();
 
-    var file_in_stream = in_file.inStream();
-
-    const input_file_bytes = try file_in_stream.stream.readAllAlloc(allocator, max_doc_file_size);
+    const input_file_bytes = try in_file.readAllAlloc(allocator, max_doc_file_size);
 
     var file_out_stream = out_file.outStream();
     var buffered_out_stream = io.BufferedOutStream(fs.File.WriteError).init(&file_out_stream.stream);

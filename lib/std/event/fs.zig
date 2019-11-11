@@ -1392,25 +1392,24 @@ pub const OutStream = struct {
 
 pub const InStream = struct {
     fd: fd_t,
-    stream: Stream,
     allocator: *Allocator,
     offset: usize,
 
-    pub const Error = PReadVError; // TODO make this not have OutOfMemory
-    pub const Stream = event.io.InStream(Error);
+    pub const ReadError = PReadVError; // TODO make this not have OutOfMemory
 
     pub fn init(allocator: *Allocator, fd: fd_t, offset: usize) InStream {
         return InStream{
             .fd = fd,
+            .allocator = allocator,
             .offset = offset,
-            .stream = Stream{ .readFn = readFn },
         };
     }
 
-    fn readFn(in_stream: *Stream, bytes: []u8) Error!usize {
-        const self = @fieldParentPtr(InStream, "stream", in_stream);
+    pub fn read(self: *InStream, bytes: []u8) ReadError!usize {
         const amt = try preadv(self.allocator, self.fd, [_][]u8{bytes}, self.offset);
         self.offset += amt;
         return amt;
     }
+
+    pub usingnamespace io.InStream(InStream);
 };

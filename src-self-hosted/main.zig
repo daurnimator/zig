@@ -607,10 +607,8 @@ fn cmdFmt(allocator: *Allocator, args: []const []const u8) !void {
             process.exit(1);
         }
 
-        var stdin_file = io.getStdIn();
-        var stdin = stdin_file.inStream();
-
-        const source_code = try stdin.stream.readAllAlloc(allocator, max_src_size);
+        const stdin = io.getStdIn();
+        const source_code = try stdin.readAllAlloc(allocator, max_src_size);
         defer allocator.free(source_code);
 
         const tree = std.zig.parse(allocator, source_code) catch |err| {

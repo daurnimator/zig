@@ -137,11 +137,9 @@ pub fn updateFileMode(source_path: []const u8, dest_path: []const u8, mode: ?Fil
     } else unreachable;
     defer atomic_file.deinit();
 
-    const in_stream = &src_file.inStream().stream;
-
     var buf: [mem.page_size * 6]u8 = undefined;
     while (true) {
-        const amt = try in_stream.readFull(buf[0..]);
+        const amt = try src_file.readFull(buf[0..]);
         try atomic_file.file.write(buf[0..amt]);
         if (amt != buf.len) {
             try atomic_file.file.updateTimes(src_stat.atime, src_stat.mtime);
@@ -161,14 +159,13 @@ pub fn copyFile(source_path: []const u8, dest_path: []const u8) !void {
     defer in_file.close();
 
     const mode = try in_file.mode();
-    const in_stream = &in_file.inStream().stream;
 
     var atomic_file = try AtomicFile.init(dest_path, mode);
     defer atomic_file.deinit();
 
     var buf: [mem.page_size]u8 = undefined;
     while (true) {
-        const amt = try in_stream.readFull(buf[0..]);
+        const amt = try in_file.readFull(buf[0..]);
         try atomic_file.file.write(buf[0..amt]);
         if (amt != buf.len) {
             return atomic_file.finish();
@@ -1107,7 +1104,7 @@ pub const Dir = struct {
         const buf = try allocator.alignedAlloc(u8, A, size);
         errdefer allocator.free(buf);
 
-        try file.inStream().stream.readNoEof(buf);
+        try file.readNoEof(buf);
         return buf;
     }
 

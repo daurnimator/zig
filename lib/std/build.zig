@@ -867,8 +867,7 @@ pub const Builder = struct {
         var stdout = std.Buffer.initNull(self.allocator);
         defer std.Buffer.deinit(&stdout);
 
-        var stdout_file_in_stream = child.stdout.?.inStream();
-        try stdout_file_in_stream.stream.readAllBuffer(&stdout, max_output_size);
+        try child.stdout.?.readAllBuffer(&stdout, max_output_size);
 
         const term = try child.wait();
         switch (term) {

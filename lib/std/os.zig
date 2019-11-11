@@ -169,8 +169,7 @@ fn getRandomBytesDevURandom(buf: []u8) !void {
         return error.NoDevice;
     }
 
-    const stream = &std.fs.File.openHandle(fd).inStream().stream;
-    stream.readNoEof(buf) catch return error.Unexpected;
+    std.fs.File.openHandle(fd).readNoEof(buf) catch return error.Unexpected;
 }
 
 /// Causes abnormal process termination.
