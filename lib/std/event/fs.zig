@@ -1367,27 +1367,25 @@ fn testFsWatch(allocator: *Allocator) !void {
 
 pub const OutStream = struct {
     fd: fd_t,
-    stream: Stream,
     allocator: *Allocator,
     offset: usize,
 
-    pub const Error = File.WriteError;
-    pub const Stream = event.io.OutStream(Error);
+    pub const WriteError = File.WriteError;
 
     pub fn init(allocator: *Allocator, fd: fd_t, offset: usize) OutStream {
         return OutStream{
             .fd = fd,
             .offset = offset,
-            .stream = Stream{ .writeFn = writeFn },
         };
     }
 
-    fn writeFn(out_stream: *Stream, bytes: []const u8) Error!void {
-        const self = @fieldParentPtr(OutStream, "stream", out_stream);
+    pub fn write(self: *OutStream, bytes: []const u8) WriteError!void {
         const offset = self.offset;
         self.offset += bytes.len;
         return pwritev(self.allocator, self.fd, [_][]const u8{bytes}, offset);
     }
+
+    pub usingnamespace io.OutStream(OutStream);
 };
 
 pub const InStream = struct {

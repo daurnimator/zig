@@ -43,8 +43,8 @@ pub fn main() !void {
 
     var targets = ArrayList([]const u8).init(allocator);
 
-    const stderr_stream = &io.getStdErr().outStream().stream;
-    const stdout_stream = &io.getStdOut().outStream().stream;
+    const stderr = io.getStdErr();
+    const stdout = io.getStdOut();
 
     while (arg_it.next(allocator)) |err_or_arg| {
         const arg = try unwrapArg(err_or_arg);
@@ -52,37 +52,37 @@ pub fn main() !void {
             const option_contents = arg[2..];
             if (option_contents.len == 0) {
                 warn("Expected option name after '-D'\n\n");
-                return usageAndErr(builder, false, stderr_stream);
+                return usageAndErr(builder, false, stderr);
             }
             if (mem.indexOfScalar(u8, option_contents, '=')) |name_end| {
                 const option_name = option_contents[0..name_end];
                 const option_value = option_contents[name_end + 1 ..];
                 if (try builder.addUserInputOption(option_name, option_value))
-                    return usageAndErr(builder, false, stderr_stream);
+                    return usageAndErr(builder, false, stderr);
             } else {
                 if (try builder.addUserInputFlag(option_contents))
-                    return usageAndErr(builder, false, stderr_stream);
+                    return usageAndErr(builder, false, stderr);
             }
         } else if (mem.startsWith(u8, arg, "-")) {
             if (mem.eql(u8, arg, "--verbose")) {
                 builder.verbose = true;
             } else if (mem.eql(u8, arg, "--help")) {
-                return usage(builder, false, stdout_stream);
+                return usage(builder, false, stdout);
             } else if (mem.eql(u8, arg, "--prefix")) {
                 builder.install_prefix = try unwrapArg(arg_it.next(allocator) orelse {
                     warn("Expected argument after --prefix\n\n");
-                    return usageAndErr(builder, false, stderr_stream);
+                    return usageAndErr(builder, false, stderr);
                 });
             } else if (mem.eql(u8, arg, "--search-prefix")) {
                 const search_prefix = try unwrapArg(arg_it.next(allocator) orelse {
                     warn("Expected argument after --search-prefix\n\n");
-                    return usageAndErr(builder, false, stderr_stream);
+                    return usageAndErr(builder, false, stderr);
                 });
                 builder.addSearchPrefix(search_prefix);
             } else if (mem.eql(u8, arg, "--override-lib-dir")) {
                 builder.override_lib_dir = try unwrapArg(arg_it.next(allocator) orelse {
                     warn("Expected argument after --override-lib-dir\n\n");
-                    return usageAndErr(builder, false, stderr_stream);
+                    return usageAndErr(builder, false, stderr);
                 });
             } else if (mem.eql(u8, arg, "--verbose-tokenize")) {
                 builder.verbose_tokenize = true;
@@ -100,7 +100,7 @@ pub fn main() !void {
                 builder.verbose_cc = true;
             } else {
                 warn("Unrecognized argument: {}\n\n", arg);
-                return usageAndErr(builder, false, stderr_stream);
+                return usageAndErr(builder, false, stderr);
             }
         } else {
             try targets.append(arg);
@@ -111,12 +111,12 @@ pub fn main() !void {
     try runBuild(builder);
 
     if (builder.validateUserInputDidItFail())
-        return usageAndErr(builder, true, stderr_stream);
+        return usageAndErr(builder, true, stderr);
 
     builder.make(targets.toSliceConst()) catch |err| {
         switch (err) {
             error.InvalidStepName => {
-                return usageAndErr(builder, true, stderr_stream);
+                return usageAndErr(builder, true, stderr);
             },
             error.UncleanExit => process.exit(1),
             else => return err,

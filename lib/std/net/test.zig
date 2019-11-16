@@ -117,6 +117,5 @@ fn testClient(addr: net.Address) anyerror!void {
 fn testServer(server: *net.StreamServer) anyerror!void {
     var client = try server.accept();
 
-    const stream = &client.file.outStream().stream;
-    try stream.print("hello from server\n");
+    try client.file.print("hello from server\n");
 }

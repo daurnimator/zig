@@ -205,7 +205,7 @@ pub fn getTriple(allocator: *std.mem.Allocator, self: std.Target) !std.Buffer {
     // using the target triple `wasm32-unknown-unknown-unknown`.
     const env_name = if (self.isWasm()) "wasm" else @tagName(self.getAbi());
 
-    var out = &std.io.BufferOutStream.init(&result).stream;
+    var out = std.io.BufferOutStream.init(&result);
     try out.print("{}-unknown-{}-{}", @tagName(self.getArch()), @tagName(self.getOs()), env_name);
 
     return result;

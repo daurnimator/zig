@@ -38,31 +38,15 @@ const Module = struct {
     checksum_offset: ?usize,
 };
 
-/// Tries to write to stderr, unbuffered, and ignores any error returned.
-/// Does not append a newline.
-var stderr_file: File = undefined;
-var stderr_file_out_stream: File.OutStream = undefined;
-
-var stderr_stream: ?*io.OutStream(File.WriteError) = null;
 var stderr_mutex = std.Mutex.init();
 
+/// Tries to write to stderr, unbuffered, and ignores any error returned.
+/// Does not append a newline.
 pub fn warn(comptime fmt: []const u8, args: ...) void {
     const held = stderr_mutex.acquire();
     defer held.release();
-    const stderr = getStderrStream();
+    const stderr = io.getStdErr();
     stderr.print(fmt, args) catch return;
-}
-
-pub fn getStderrStream() *io.OutStream(File.WriteError) {
-    if (stderr_stream) |st| {
-        return st;
-    } else {
-        stderr_file = io.getStdErr();
-        stderr_file_out_stream = stderr_file.outStream();
-        const st = &stderr_file_out_stream.stream;
-        stderr_stream = st;
-        return st;
-    }
 }
 
 pub fn getStderrMutex() *std.Mutex {
@@ -84,13 +68,13 @@ pub fn getSelfDebugInfo() !*DebugInfo {
 fn wantTtyColor() bool {
     var bytes: [128]u8 = undefined;
     const allocator = &std.heap.FixedBufferAllocator.init(bytes[0..]).allocator;
-    return if (process.getEnvVarOwned(allocator, "ZIG_DEBUG_COLOR")) |_| true else |_| stderr_file.isTty();
+    return if (process.getEnvVarOwned(allocator, "ZIG_DEBUG_COLOR")) |_| true else |_| io.getStdErr().isTty();
 }
 
 /// Tries to print the current stack trace to stderr, unbuffered, and ignores any error returned.
 /// TODO multithreaded awareness
 pub fn dumpCurrentStackTrace(start_addr: ?usize) void {
-    const stderr = getStderrStream();
+    const stderr = io.getStdErr();
     if (builtin.strip_debug_info) {
         stderr.print("Unable to dump stack trace: debug info stripped\n") catch return;
         return;
@@ -109,7 +93,7 @@ pub fn dumpCurrentStackTrace(start_addr: ?usize) void {
 /// unbuffered, and ignores any error returned.
 /// TODO multithreaded awareness
 pub fn dumpStackTraceFromBase(bp: usize, ip: usize) void {
-    const stderr = getStderrStream();
+    const stderr = io.getStdErr();
     if (builtin.strip_debug_info) {
         stderr.print("Unable to dump stack trace: debug info stripped\n") catch return;
         return;
@@ -182,7 +166,7 @@ pub fn captureStackTrace(first_address: ?usize, stack_trace: *builtin.StackTrace
 /// Tries to print a stack trace to stderr, unbuffered, and ignores any error returned.
 /// TODO multithreaded awareness
 pub fn dumpStackTrace(stack_trace: builtin.StackTrace) void {
-    const stderr = getStderrStream();
+    const stderr = io.getStdErr();
     if (builtin.strip_debug_info) {
         stderr.print("Unable to dump stack trace: debug info stripped\n") catch return;
         return;
@@ -238,7 +222,7 @@ pub fn panicExtra(trace: ?*const builtin.StackTrace, first_trace_addr: ?usize, c
         // which first called panic can finish printing a stack trace.
         os.abort();
     }
-    const stderr = getStderrStream();
+    const stderr = io.getStdErr();
     stderr.print(format ++ "\n", args) catch os.abort();
     if (trace) |t| {
         dumpStackTrace(t.*);
@@ -569,6 +553,7 @@ const TtyColor = enum {
 
 /// TODO this is a special case hack right now. clean it up and maybe make it part of std.fmt
 fn setTtyColor(tty_color: TtyColor) void {
+    const stderr_file = io.getStdErr();
     if (stderr_file.supportsAnsiEscapeCodes()) {
         switch (tty_color) {
             TtyColor.Red => {

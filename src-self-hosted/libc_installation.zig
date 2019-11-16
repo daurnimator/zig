@@ -33,7 +33,7 @@ pub const LibCInstallation = struct {
         self: *LibCInstallation,
         allocator: *Allocator,
         libc_file: []const u8,
-        stderr: *std.io.OutStream(fs.File.WriteError),
+        stderr: var,
     ) !void {
         self.initEmpty();
 
@@ -103,7 +103,7 @@ pub const LibCInstallation = struct {
         }
     }
 
-    pub fn render(self: *const LibCInstallation, out: *std.io.OutStream(fs.File.WriteError)) !void {
+    pub fn render(self: *const LibCInstallation, out: var) !void {
         @setEvalBranchQuota(4000);
         try out.print(
             \\# The directory that contains `stdlib.h`.
@@ -254,7 +254,7 @@ pub const LibCInstallation = struct {
 
         for (searches) |search| {
             result_buf.shrink(0);
-            const stream = &std.io.BufferOutStream.init(&result_buf).stream;
+            var stream = std.io.BufferOutStream.init(&result_buf);
             try stream.print("{}\\Include\\{}\\ucrt", search.path, search.version);
 
             const stdlib_path = try fs.path.join(
@@ -281,7 +281,7 @@ pub const LibCInstallation = struct {
 
         for (searches) |search| {
             result_buf.shrink(0);
-            const stream = &std.io.BufferOutStream.init(&result_buf).stream;
+            var stream = std.io.BufferOutStream.init(&result_buf);
             try stream.print("{}\\Lib\\{}\\ucrt\\", search.path, search.version);
             switch (builtin.arch) {
                 .i386 => try stream.write("x86"),
@@ -359,7 +359,7 @@ pub const LibCInstallation = struct {
 
         for (searches) |search| {
             result_buf.shrink(0);
-            const stream = &std.io.BufferOutStream.init(&result_buf).stream;
+            var stream = std.io.BufferOutStream.init(&result_buf);
             try stream.print("{}\\Lib\\{}\\um\\", search.path, search.version);
             switch (builtin.arch) {
                 .i386 => try stream.write("x86\\"),

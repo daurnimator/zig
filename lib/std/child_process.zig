@@ -197,8 +197,8 @@ pub const ChildProcess = struct {
         defer Buffer.deinit(&stdout);
         defer Buffer.deinit(&stderr);
 
-        try child.stdout.stream.readAllBuffer(&stdout, max_output_size);
-        try child.stderr.stream.readAllBuffer(&stderr, max_output_size);
+        try child.stdout.readAllBuffer(&stdout, max_output_size);
+        try child.stderr.readAllBuffer(&stderr, max_output_size);
 
         return ExecResult{
             .term = try child.wait(),
@@ -711,7 +711,7 @@ fn windowsCreateCommandLine(allocator: *mem.Allocator, argv: []const []const u8)
     var buf = try Buffer.initSize(allocator, 0);
     defer buf.deinit();
 
-    var buf_stream = &io.BufferOutStream.init(&buf).stream;
+    var buf_stream = io.BufferOutStream.init(&buf);
 
     for (argv) |arg, arg_i| {
         if (arg_i != 0) try buf.appendByte(' ');
@@ -783,8 +783,7 @@ fn forkChildErrReport(fd: i32, err: ChildProcess.SpawnError) noreturn {
 const ErrInt = @IntType(false, @sizeOf(anyerror) * 8);
 
 fn writeIntFd(fd: i32, value: ErrInt) !void {
-    const stream = &File.openHandle(fd).outStream().stream;
-    stream.writeIntNative(ErrInt, value) catch return error.SystemResources;
+    File.openHandle(fd).writeIntNative(ErrInt, value) catch return error.SystemResources;
 }
 
 fn readIntFd(fd: i32) !ErrInt {
