@@ -1015,7 +1015,7 @@ pub const Value = union(enum) {
         var held = std.debug.getStderrMutex().acquire();
         defer held.release();
 
-        const stderr = std.debug.getStderrStream();
+        const stderr = std.io.getStdErr();
         self.dumpStream(stderr, 1024) catch return;
     }
 
@@ -1026,13 +1026,13 @@ pub const Value = union(enum) {
             var held = std.debug.getStderrMutex().acquire();
             defer held.release();
 
-            const stderr = std.debug.getStderrStream();
+            const stderr = std.io.getStdErr();
             self.dumpStreamIndent(indent, stderr, 1024) catch return;
         }
     }
 
     pub fn dumpStream(self: @This(), stream: var, comptime max_depth: usize) !void {
-        var w = std.json.WriteStream(@typeOf(stream).Child, max_depth).init(stream);
+        var w = std.json.WriteStream(@typeOf(stream), max_depth).init(stream);
         w.newline = "";
         w.one_indent = "";
         w.space = "";
@@ -1042,7 +1042,7 @@ pub const Value = union(enum) {
     pub fn dumpStreamIndent(self: @This(), comptime indent: usize, stream: var, comptime max_depth: usize) !void {
         var one_indent = " " ** indent;
 
-        var w = std.json.WriteStream(@typeOf(stream).Child, max_depth).init(stream);
+        var w = std.json.WriteStream(@typeOf(stream), max_depth).init(stream);
         w.one_indent = one_indent;
         try w.emitJson(self);
     }
@@ -1330,9 +1330,8 @@ test "import more json tests" {
 test "write json then parse it" {
     var out_buffer: [1000]u8 = undefined;
 
-    var slice_out_stream = std.io.SliceOutStream.init(&out_buffer);
-    const out_stream = &slice_out_stream.stream;
-    var jw = WriteStream(@typeOf(out_stream).Child, 4).init(out_stream);
+    var out_stream = std.io.SliceOutStream.init(&out_buffer);
+    var jw = WriteStream(*std.io.SliceOutStream, 4).init(&out_stream);
 
     try jw.beginObject();
 
@@ -1364,7 +1363,7 @@ test "write json then parse it" {
     var mem_buffer: [1024 * 20]u8 = undefined;
     const allocator = &std.heap.FixedBufferAllocator.init(&mem_buffer).allocator;
     var parser = Parser.init(allocator, false);
-    const tree = try parser.parse(slice_out_stream.getWritten());
+    const tree = try parser.parse(out_stream.getWritten());
 
     testing.expect(tree.root.Object.get("f").?.value.Bool == false);
     testing.expect(tree.root.Object.get("t").?.value.Bool == true);

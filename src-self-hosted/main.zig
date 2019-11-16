@@ -22,9 +22,8 @@ const Target = std.Target;
 const errmsg = @import("errmsg.zig");
 const LibCInstallation = @import("libc_installation.zig").LibCInstallation;
 
-var stderr_file: fs.File = undefined;
-var stderr: *io.OutStream(fs.File.WriteError) = undefined;
-var stdout: *io.OutStream(fs.File.WriteError) = undefined;
+var stdout: fs.File = undefined;
+var stderr: fs.File = undefined;
 
 pub const io_mode = .evented;
 
@@ -59,10 +58,8 @@ pub fn main() !void {
     // TODO https://github.com/ziglang/zig/issues/3783
     const allocator = std.heap.page_allocator;
 
-    stdout = &std.io.getStdOut().outStream().stream;
-
-    stderr_file = std.io.getStdErr();
-    stderr = &stderr_file.outStream().stream;
+    stdout = std.io.getStdOut();
+    stderr = std.io.getStdErr();
 
     const args = try process.argsAlloc(allocator);
     // TODO I'm getting  unreachable code here, which shouldn't happen
@@ -486,7 +483,7 @@ fn processBuildEvents(comp: *Compilation, color: errmsg.Color) void {
                 stderr.print("Build {} compile errors:\n", count) catch process.exit(1);
                 for (msgs) |msg| {
                     defer msg.destroy();
-                    msg.printToFile(stderr_file, color) catch process.exit(1);
+                    msg.printToFile(stderr, color) catch process.exit(1);
                 }
             },
         }
@@ -622,7 +619,7 @@ fn cmdFmt(allocator: *Allocator, args: []const []const u8) !void {
             const msg = try errmsg.Msg.createFromParseError(allocator, parse_error, tree, "<stdin>");
             defer msg.destroy();
 
-            try msg.printToFile(stderr_file, color);
+            try msg.printToFile(stderr, color);
         }
         if (tree.errors.len != 0) {
             process.exit(1);
@@ -735,7 +732,7 @@ async fn fmtPath(fmt: *Fmt, file_path_ref: []const u8, check_mode: bool) FmtErro
         const msg = try errmsg.Msg.createFromParseError(fmt.allocator, parse_error, tree, file_path);
         defer fmt.allocator.destroy(msg);
 
-        try msg.printToFile(stderr_file, fmt.color);
+        try msg.printToFile(stderr, fmt.color);
     }
     if (tree.errors.len != 0) {
         fmt.any_error = true;

@@ -42,8 +42,7 @@ pub fn main() !void {
 
     const input_file_bytes = try in_file.readAllAlloc(allocator, max_doc_file_size);
 
-    var file_out_stream = out_file.outStream();
-    var buffered_out_stream = io.BufferedOutStream(fs.File.WriteError).init(&file_out_stream.stream);
+    var buffered_out_stream = io.BufferedOutStream(fs.File).init(&out_file);
 
     var tokenizer = Tokenizer.init(in_file_name, input_file_bytes);
     var toc = try genToc(allocator, &tokenizer);
@@ -51,7 +50,7 @@ pub fn main() !void {
     try fs.makePath(allocator, tmp_dir_name);
     defer fs.deleteTree(tmp_dir_name) catch {};
 
-    try genHtml(allocator, &tokenizer, &toc, &buffered_out_stream.stream, zig_exe);
+    try genHtml(allocator, &tokenizer, &toc, &buffered_out_stream, zig_exe);
     try buffered_out_stream.flush();
 }
 
@@ -324,8 +323,7 @@ fn genToc(allocator: *mem.Allocator, tokenizer: *Tokenizer) !Toc {
     var toc_buf = try std.Buffer.initSize(allocator, 0);
     defer toc_buf.deinit();
 
-    var toc_buf_adapter = io.BufferOutStream.init(&toc_buf);
-    var toc = &toc_buf_adapter.stream;
+    var toc = io.BufferOutStream.init(&toc_buf);
 
     var nodes = std.ArrayList(Node).init(allocator);
     defer nodes.deinit();
@@ -596,8 +594,7 @@ fn urlize(allocator: *mem.Allocator, input: []const u8) ![]u8 {
     var buf = try std.Buffer.initSize(allocator, 0);
     defer buf.deinit();
 
-    var buf_adapter = io.BufferOutStream.init(&buf);
-    var out = &buf_adapter.stream;
+    var out = io.BufferOutStream.init(&buf);
     for (input) |c| {
         switch (c) {
             'a'...'z', 'A'...'Z', '_', '-', '0'...'9' => {
@@ -616,8 +613,7 @@ fn escapeHtml(allocator: *mem.Allocator, input: []const u8) ![]u8 {
     var buf = try std.Buffer.initSize(allocator, 0);
     defer buf.deinit();
 
-    var buf_adapter = io.BufferOutStream.init(&buf);
-    var out = &buf_adapter.stream;
+    var out = io.BufferOutStream.init(&buf);
     try writeEscaped(out, input);
     return buf.toOwnedSlice();
 }
@@ -662,8 +658,7 @@ fn termColor(allocator: *mem.Allocator, input: []const u8) ![]u8 {
     var buf = try std.Buffer.initSize(allocator, 0);
     defer buf.deinit();
 
-    var buf_adapter = io.BufferOutStream.init(&buf);
-    var out = &buf_adapter.stream;
+    var out = io.BufferOutStream.init(&buf);
     var number_start_index: usize = undefined;
     var first_number: usize = undefined;
     var second_number: usize = undefined;

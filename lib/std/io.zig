@@ -59,7 +59,7 @@ pub const SeekableStream = @import("io/seekable_stream.zig").SeekableStream;
 pub const SliceSeekableInStream = @import("io/seekable_stream.zig").SliceSeekableInStream;
 pub const COutStream = @import("io/c_out_stream.zig").COutStream;
 pub usingnamespace @import("io/in_stream.zig");
-pub const OutStream = @import("io/out_stream.zig").OutStream;
+pub usingnamespace @import("io/out_stream.zig");
 
 /// Deprecated; use `std.fs.Dir.writeFile`.
 pub fn writeFile(path: []const u8, data: []const u8) !void {
@@ -397,11 +397,6 @@ pub fn BitInStream(endian: builtin.Endian, comptime BaseStream: type) type {
 /// This is a simple OutStream that writes to a fixed buffer, and returns an error
 /// when it runs out of space.
 pub const SliceOutStream = struct {
-    pub const Error = error{OutOfSpace};
-    pub const Stream = OutStream(Error);
-
-    stream: Stream,
-
     pos: usize,
     slice: []u8,
 
@@ -409,7 +404,6 @@ pub const SliceOutStream = struct {
         return SliceOutStream{
             .slice = slice,
             .pos = 0,
-            .stream = Stream{ .writeFn = writeFn },
         };
     }
 
@@ -421,9 +415,9 @@ pub const SliceOutStream = struct {
         self.pos = 0;
     }
 
-    fn writeFn(out_stream: *Stream, bytes: []const u8) Error!void {
-        const self = @fieldParentPtr(SliceOutStream, "stream", out_stream);
+    pub const WriteError = error{OutOfSpace};
 
+    pub fn write(self: *SliceOutStream, bytes: []const u8) WriteError!void {
         assert(self.pos <= self.slice.len);
 
         const n = if (self.pos + bytes.len <= self.slice.len)
@@ -435,79 +429,73 @@ pub const SliceOutStream = struct {
         self.pos += n;
 
         if (n < bytes.len) {
-            return Error.OutOfSpace;
+            return WriteError.OutOfSpace;
         }
     }
+
+    pub usingnamespace OutStream(SliceOutStream);
 };
 
 test "io.SliceOutStream" {
     var buf: [255]u8 = undefined;
     var slice_stream = SliceOutStream.init(buf[0..]);
-    const stream = &slice_stream.stream;
 
-    try stream.print("{}{}!", "Hello", "World");
+    try slice_stream.print("{}{}!", "Hello", "World");
     testing.expectEqualSlices(u8, "HelloWorld!", slice_stream.getWritten());
 }
 
-var null_out_stream_state = NullOutStream.init();
-pub const null_out_stream = &null_out_stream_state.stream;
+pub const null_out_stream = NullOutStream.init();
 
 /// An OutStream that doesn't write to anything.
 pub const NullOutStream = struct {
-    pub const Error = error{};
-    pub const Stream = OutStream(Error);
-
-    stream: Stream,
-
     pub fn init() NullOutStream {
-        return NullOutStream{
-            .stream = Stream{ .writeFn = writeFn },
-        };
+        return NullOutStream{};
     }
 
-    fn writeFn(out_stream: *Stream, bytes: []const u8) Error!void {}
+    pub const WriteError = error{};
+
+    pub fn write(self: NullOutStream, bytes: []const u8) WriteError!void {}
+
+    pub usingnamespace OutStream(NullOutStream);
 };
 
 test "io.NullOutStream" {
     var null_stream = NullOutStream.init();
-    const stream = &null_stream.stream;
-    stream.write("yay" ** 10000) catch unreachable;
+    null_stream.write("yay" ** 10000) catch unreachable;
 }
 
 /// An OutStream that counts how many bytes has been written to it.
-pub fn CountingOutStream(comptime OutStreamError: type) type {
+pub fn CountingOutStream(comptime Stream: type) type {
     return struct {
         const Self = @This();
-        pub const Stream = OutStream(Error);
-        pub const Error = OutStreamError;
 
-        stream: Stream,
         bytes_written: u64,
         child_stream: *Stream,
 
         pub fn init(child_stream: *Stream) Self {
             return Self{
-                .stream = Stream{ .writeFn = writeFn },
                 .bytes_written = 0,
                 .child_stream = child_stream,
             };
         }
 
-        fn writeFn(out_stream: *Stream, bytes: []const u8) OutStreamError!void {
-            const self = @fieldParentPtr(Self, "stream", out_stream);
+        pub const WriteError = OutStreamError(Stream);
+
+        pub fn write(self: *Self, bytes: []const u8) WriteError!void {
             try self.child_stream.write(bytes);
             self.bytes_written += bytes.len;
         }
+
+        pub usingnamespace OutStream(Self);
     };
 }
 
 test "io.CountingOutStream" {
     var null_stream = NullOutStream.init();
-    var counting_stream = CountingOutStream(NullOutStream.Error).init(&null_stream.stream);
-    const stream = &counting_stream.stream;
+    var counting_stream = CountingOutStream(NullOutStream).init(&null_stream);
 
     const bytes = "yay" ** 10000;
-    stream.write(bytes) catch unreachable;
+    counting_stream.write(bytes) catch unreachable;
     testing.expect(counting_stream.bytes_written == bytes.len);
 }
 
@@ -515,28 +503,24 @@ pub fn BufferedOutStream(comptime Error: type) type {
     return BufferedOutStreamCustom(mem.page_size, Error);
 }
 
-pub fn BufferedOutStreamCustom(comptime buffer_size: usize, comptime OutStreamError: type) type {
+pub fn BufferedOutStreamCustom(comptime buffer_size: usize, comptime UnBufferedOutStream: type) type {
     return struct {
         const Self = @This();
-        pub const Stream = OutStream(Error);
-        pub const Error = OutStreamError;
+        pub const WriteError = OutStreamError(UnBufferedOutStream);
 
-        stream: Stream,
-
-        unbuffered_out_stream: *Stream,
+        unbuffered_out_stream: UnBufferedOutStream,
 
         const FifoType = std.fifo.LinearFifo(u8, std.fifo.LinearFifoBufferType{ .Static = buffer_size });
         fifo: FifoType,
 
-        pub fn init(unbuffered_out_stream: *Stream) Self {
+        pub fn init(unbuffered_out_stream: UnBufferedOutStream) Self {
             return Self{
                 .unbuffered_out_stream = unbuffered_out_stream,
                 .fifo = FifoType.init(),
-                .stream = Stream{ .writeFn = writeFn },
             };
         }
 
-        pub fn flush(self: *Self) !void {
+        pub fn flush(self: *Self) WriteError!void {
             while (true) {
                 const slice = self.fifo.readableSlice(0);
                 if (slice.len == 0) break;
@@ -545,66 +529,63 @@ pub fn BufferedOutStreamCustom(comptime buffer_size: usize, comptime OutStreamEr
             }
         }
 
-        fn writeFn(out_stream: *Stream, bytes: []const u8) Error!void {
-            const self = @fieldParentPtr(Self, "stream", out_stream);
-
+        pub fn write(self: *Self, bytes: []const u8) WriteError!void {
             if (bytes.len >= self.fifo.writableLength()) {
                 try self.flush();
                 return self.unbuffered_out_stream.write(bytes);
             }
             self.fifo.writeAssumeCapacity(bytes);
         }
+
+        pub usingnamespace OutStream(Self);
     };
 }
 
 /// Implementation of OutStream trait for Buffer
 pub const BufferOutStream = struct {
     buffer: *Buffer,
-    stream: Stream,
-
-    pub const Error = error{OutOfMemory};
-    pub const Stream = OutStream(Error);
 
     pub fn init(buffer: *Buffer) BufferOutStream {
         return BufferOutStream{
             .buffer = buffer,
-            .stream = Stream{ .writeFn = writeFn },
         };
     }
 
-    fn writeFn(out_stream: *Stream, bytes: []const u8) !void {
-        const self = @fieldParentPtr(BufferOutStream, "stream", out_stream);
+    pub const WriteError = error{OutOfMemory};
+
+    pub fn write(self: *BufferOutStream, bytes: []const u8) WriteError!void {
         return self.buffer.append(bytes);
     }
+
+    pub usingnamespace OutStream(BufferOutStream);
 };
 
 /// Creates a stream which allows for writing bit fields to another stream
-pub fn BitOutStream(endian: builtin.Endian, comptime Error: type) type {
+pub fn BitOutStream(endian: builtin.Endian, comptime BaseStream: type) type {
     return struct {
         const Self = @This();
 
-        out_stream: *Stream,
+        out_stream: BaseStream,
         bit_buffer: u8,
         bit_count: u4,
-        stream: Stream,
 
-        pub const Stream = OutStream(Error);
+        pub const WriteError = OutStreamError(BaseStream);
+
         const u8_bit_count = comptime meta.bitCount(u8);
         const u4_bit_count = comptime meta.bitCount(u4);
 
-        pub fn init(out_stream: *Stream) Self {
+        pub fn init(out_stream: BaseStream) Self {
             return Self{
                 .out_stream = out_stream,
                 .bit_buffer = 0,
                 .bit_count = 0,
-                .stream = Stream{ .writeFn = write },
             };
         }
 
         /// Write the specified number of bits to the stream from the least significant bits of
         ///  the specified unsigned int value. Bits will only be written to the stream when there
         ///  are enough to fill a byte.
-        pub fn writeBits(self: *Self, value: var, bits: usize) Error!void {
+        pub fn writeBits(self: *Self, value: var, bits: usize) WriteError!void {
             if (bits == 0) return;
 
             const U = @typeOf(value);
@@ -685,16 +666,14 @@ pub fn BitOutStream(endian: builtin.Endian, comptime Error: type) type {
         }
 
         /// Flush any remaining bits to the stream.
-        pub fn flushBits(self: *Self) Error!void {
+        pub fn flushBits(self: *Self) WriteError!void {
             if (self.bit_count == 0) return;
             try self.out_stream.writeByte(self.bit_buffer);
             self.bit_buffer = 0;
             self.bit_count = 0;
         }
 
-        pub fn write(self_stream: *Stream, buffer: []const u8) Error!void {
-            var self = @fieldParentPtr(Self, "stream", self_stream);
-
+        pub fn write(self: *Self, buffer: []const u8) WriteError!void {
             //@NOTE: I'm not sure this is a good idea, maybe flushBits should be forced
             if (self.bit_count > 0) {
                 for (buffer) |b, i|
@@ -704,13 +683,14 @@ pub fn BitOutStream(endian: builtin.Endian, comptime Error: type) type {
 
             return self.out_stream.write(buffer);
         }
+
+        pub usingnamespace OutStream(Self);
     };
 }
 
 pub const BufferedAtomicFile = struct {
     atomic_file: fs.AtomicFile,
-    file_stream: File.OutStream,
-    buffered_stream: BufferedOutStream(File.WriteError),
+    buffered_stream: BufferedOutStream(File),
     allocator: *mem.Allocator,
 
     pub fn create(allocator: *mem.Allocator, dest_path: []const u8) !*BufferedAtomicFile {
@@ -718,7 +698,6 @@ pub const BufferedAtomicFile = struct {
         var self = try allocator.create(BufferedAtomicFile);
         self.* = BufferedAtomicFile{
             .atomic_file = undefined,
-            .file_stream = undefined,
             .buffered_stream = undefined,
             .allocator = allocator,
         };
@@ -727,8 +706,7 @@ pub const BufferedAtomicFile = struct {
         self.atomic_file = try fs.AtomicFile.init(dest_path, File.default_mode);
         errdefer self.atomic_file.deinit();
 
-        self.file_stream = self.atomic_file.file.outStream();
-        self.buffered_stream = BufferedOutStream(File.WriteError).init(&self.file_stream.stream);
+        self.buffered_stream = BufferedOutStream(File).init(self.atomic_file.file);
         return self;
     }
 
@@ -743,8 +721,8 @@ pub const BufferedAtomicFile = struct {
         try self.atomic_file.finish();
     }
 
-    pub fn stream(self: *BufferedAtomicFile) *OutStream(File.WriteError) {
-        return &self.buffered_stream.stream;
+    pub fn stream(self: *BufferedAtomicFile) *BufferedOutStream(File) {
+        return &self.buffered_stream;
     }
 };
 
@@ -1006,29 +984,27 @@ pub fn Deserializer(comptime endian: builtin.Endian, comptime packing: Packing, 
 ///  which will be called when the serializer is used to serialize that type. It will
 ///  pass a const pointer to the type instance to be serialized and a pointer
 ///  to the serializer struct.
-pub fn Serializer(comptime endian: builtin.Endian, comptime packing: Packing, comptime Error: type) type {
+pub fn Serializer(comptime endian: builtin.Endian, comptime packing: Packing, comptime Stream: type) type {
     return struct {
         const Self = @This();
 
-        out_stream: if (packing == .Bit) BitOutStream(endian, Stream.Error) else *Stream,
+        out_stream: if (packing == .Bit) BitOutStream(endian, Stream) else Stream,
 
-        pub const Stream = OutStream(Error);
-
-        pub fn init(out_stream: *Stream) Self {
+        pub fn init(out_stream: Stream) Self {
             return Self{
                 .out_stream = switch (packing) {
-                    .Bit => BitOutStream(endian, Stream.Error).init(out_stream),
+                    .Bit => BitOutStream(endian, Stream).init(out_stream),
                     .Byte => out_stream,
                 },
             };
         }
 
         /// Flushes any unwritten bits to the stream
-        pub fn flush(self: *Self) Error!void {
+        pub fn flush(self: *Self) OutStreamError(Stream)!void {
             if (packing == .Bit) return self.out_stream.flushBits();
         }
 
-        fn serializeInt(self: *Self, value: var) Error!void {
+        fn serializeInt(self: *Self, value: var) OutStreamError(Stream)!void {
             const T = @typeOf(value);
             comptime assert(trait.is(builtin.TypeId.Int)(T) or trait.is(builtin.TypeId.Float)(T));
 
@@ -1060,7 +1036,7 @@ pub fn Serializer(comptime endian: builtin.Endian, comptime packing: Packing, co
         }
 
         /// Serializes the passed value into the stream
-        pub fn serialize(self: *Self, value: var) Error!void {
+        pub fn serialize(self: *Self, value: var) OutStreamError(Stream)!void {
             const T = comptime @typeOf(value);
 
             if (comptime trait.isIndexable(T)) {
@@ -1073,7 +1049,7 @@ pub fn Serializer(comptime endian: builtin.Endian, comptime packing: Packing, co
             if (comptime trait.hasFn("serialize")(T)) return T.serialize(value, self);
 
             if (comptime trait.isPacked(T) and packing != .Bit) {
-                var packed_serializer = Serializer(endian, .Bit, Error).init(self.out_stream);
+                var packed_serializer = Serializer(endian, .Bit, Stream).init(self.out_stream);
                 try packed_serializer.serialize(value);
                 try packed_serializer.flush();
                 return;

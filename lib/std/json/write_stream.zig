@@ -30,11 +30,11 @@ pub fn WriteStream(comptime OutStream: type, comptime max_depth: usize) type {
         /// The string used as spacing.
         space: []const u8 = " ",
 
-        stream: *OutStream,
+        stream: OutStream,
         state_index: usize,
         state: [max_depth]State,
 
-        pub fn init(stream: *OutStream) Self {
+        pub fn init(stream: OutStream) Self {
             var self = Self{
                 .stream = stream,
                 .state_index = 1,
@@ -202,7 +202,7 @@ pub fn WriteStream(comptime OutStream: type, comptime max_depth: usize) type {
         }
 
         /// Writes the complete json into the output stream
-        pub fn emitJson(self: *Self, json: std.json.Value) Stream.Error!void {
+        pub fn emitJson(self: *Self, json: std.json.Value) std.io.OutStreamError(OutStream)!void {
             switch (json) {
                 .Null => try self.emitNull(),
                 .Bool => |inner| try self.emitBool(inner),
@@ -252,12 +252,11 @@ pub fn WriteStream(comptime OutStream: type, comptime max_depth: usize) type {
 test "json write stream" {
     var out_buf: [1024]u8 = undefined;
     var slice_stream = std.io.SliceOutStream.init(&out_buf);
-    const out = &slice_stream.stream;
 
     var mem_buf: [1024 * 10]u8 = undefined;
     const allocator = &std.heap.FixedBufferAllocator.init(&mem_buf).allocator;
 
-    var w = std.json.WriteStream(@typeOf(out).Child, 10).init(out);
+    var w = std.json.WriteStream(*std.io.SliceOutStream, 10).init(&slice_stream);
     try w.emitJson(try getJson(allocator));
 
     const result = slice_stream.getWritten();

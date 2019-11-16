@@ -16,9 +16,7 @@ const Flag = arg.Flag;
 const errmsg = @import("errmsg.zig");
 const DepTokenizer = @import("dep_tokenizer.zig").Tokenizer;
 
-var stderr_file: fs.File = undefined;
-var stderr: *io.OutStream(fs.File.WriteError) = undefined;
-var stdout: *io.OutStream(fs.File.WriteError) = undefined;
+var stderr: fs.File = undefined;
 
 comptime {
     _ = @import("dep_tokenizer.zig");
@@ -125,7 +123,7 @@ export fn stage2_free_clang_errors(errors_ptr: [*]translate_c.ClangErrMsg, error
 }
 
 export fn stage2_render_ast(tree: *ast.Tree, output_file: *FILE) Error {
-    const c_out_stream = &std.io.COutStream.init(output_file).stream;
+    const c_out_stream = std.io.COutStream.init(output_file);
     _ = std.zig.render(std.heap.c_allocator, c_out_stream, tree) catch |e| switch (e) {
         error.WouldBlock => unreachable, // stage1 opens stuff in exclusively blocking mode
         error.SystemResources => return Error.SystemResources,
@@ -165,9 +163,8 @@ fn fmtMain(argc: c_int, argv: [*]const [*:0]const u8) !void {
         try args_list.append(std.mem.toSliceConst(u8, argv[arg_i]));
     }
 
-    stdout = &std.io.getStdOut().outStream().stream;
-    stderr_file = std.io.getStdErr();
-    stderr = &stderr_file.outStream().stream;
+    const stdout = std.io.getStdOut();
+    stderr = std.io.getStdErr();
 
     const args = args_list.toSliceConst();
     var flags = try Args.parse(allocator, &self_hosted_main.args_fmt_spec, args[2..]);
@@ -211,7 +208,7 @@ fn fmtMain(argc: c_int, argv: [*]const [*:0]const u8) !void {
 
         var error_it = tree.errors.iterator(0);
         while (error_it.next()) |parse_error| {
-            try printErrMsgToFile(allocator, parse_error, tree, "<stdin>", stderr_file, color);
+            try printErrMsgToFile(allocator, parse_error, tree, "<stdin>", stderr, color);
         }
         if (tree.errors.len != 0) {
             process.exit(1);
@@ -309,7 +306,7 @@ fn fmtPath(fmt: *Fmt, file_path_ref: []const u8, check_mode: bool) FmtError!void
 
     var error_it = tree.errors.iterator(0);
     while (error_it.next()) |parse_error| {
-        try printErrMsgToFile(fmt.allocator, parse_error, tree, file_path, stderr_file, fmt.color);
+        try printErrMsgToFile(fmt.allocator, parse_error, tree, file_path, stderr, fmt.color);
     }
     if (tree.errors.len != 0) {
         fmt.any_error = true;
@@ -368,26 +365,25 @@ fn printErrMsgToFile(
     const end_loc = tree.tokenLocationPtr(first_token.end, last_token);
 
     var text_buf = try std.Buffer.initSize(allocator, 0);
-    var out_stream = &std.io.BufferOutStream.init(&text_buf).stream;
-    try parse_error.render(&tree.tokens, out_stream);
+    var out_stream = std.io.BufferOutStream.init(&text_buf);
+    try parse_error.render(&tree.tokens, &out_stream);
     const text = text_buf.toOwnedSlice();
 
-    const stream = &file.outStream().stream;
-    try stream.print("{}:{}:{}: error: {}\n", path, start_loc.line + 1, start_loc.column + 1, text);
+    try file.print("{}:{}:{}: error: {}\n", path, start_loc.line + 1, start_loc.column + 1, text);
 
     if (!color_on) return;
 
     // Print \r and \t as one space each so that column counts line up
     for (tree.source[start_loc.line_start..start_loc.line_end]) |byte| {
-        try stream.writeByte(switch (byte) {
+        try file.writeByte(switch (byte) {
             '\r', '\t' => ' ',
             else => byte,
         });
     }
-    try stream.writeByte('\n');
-    try stream.writeByteNTimes(' ', start_loc.column);
-    try stream.writeByteNTimes('~', last_token.end - first_token.start);
-    try stream.writeByte('\n');
+    try file.writeByte('\n');
+    try file.writeByteNTimes(' ', start_loc.column);
+    try file.writeByteNTimes('~', last_token.end - first_token.start);
+    try file.writeByte('\n');
 }
 
 export fn stage2_DepTokenizer_init(input: [*]const u8, len: usize) stage2_DepTokenizer {

@@ -300,6 +300,8 @@ pub const File = struct {
         return os.write(self.handle, bytes);
     }
 
+    pub usingnamespace io.OutStream(File);
+
     pub fn writev_iovec(self: File, iovecs: []const os.iovec_const) WriteError!void {
         if (std.event.Loop.instance) |loop| {
             return std.event.fs.writevPosix(loop, self.handle, iovecs);
@@ -307,25 +309,4 @@ pub const File = struct {
             return os.writev(self.handle, iovecs);
         }
     }
-
-    pub fn outStream(file: File) OutStream {
-        return OutStream{
-            .file = file,
-            .stream = OutStream.Stream{ .writeFn = OutStream.writeFn },
-        };
-    }
-
-    /// Implementation of io.OutStream trait for File
-    pub const OutStream = struct {
-        file: File,
-        stream: Stream,
-
-        pub const Error = WriteError;
-        pub const Stream = io.OutStream(Error);
-
-        fn writeFn(out_stream: *Stream, bytes: []const u8) Error!void {
-            const self = @fieldParentPtr(OutStream, "stream", out_stream);
-            return self.file.write(bytes);
-        }
-    };
 };

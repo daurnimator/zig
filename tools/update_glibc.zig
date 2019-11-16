@@ -231,26 +231,24 @@ pub fn main() !void {
         const vers_txt_path = try fs.path.join(allocator, [_][]const u8{ glibc_out_dir, "vers.txt" });
         const vers_txt_file = try fs.File.openWrite(vers_txt_path);
         defer vers_txt_file.close();
-        var buffered = std.io.BufferedOutStream(fs.File.WriteError).init(&vers_txt_file.outStream().stream);
-        const vers_txt = &buffered.stream;
+        var vers_txt = std.io.BufferedOutStream(fs.File).init(&vers_txt_file);
         for (global_ver_list) |name, i| {
             _ = global_ver_set.put(name, i) catch unreachable;
             try vers_txt.print("{}\n", name);
         }
-        try buffered.flush();
+        try vers_txt.flush();
     }
     {
         const fns_txt_path = try fs.path.join(allocator, [_][]const u8{ glibc_out_dir, "fns.txt" });
         const fns_txt_file = try fs.File.openWrite(fns_txt_path);
         defer fns_txt_file.close();
-        var buffered = std.io.BufferedOutStream(fs.File.WriteError).init(&fns_txt_file.outStream().stream);
-        const fns_txt = &buffered.stream;
+        var fns_txt = std.io.BufferedOutStream(fs.File).init(&fns_txt_file);
         for (global_fn_list) |name, i| {
             const kv = global_fn_set.get(name).?;
             kv.value.index = i;
             try fns_txt.print("{} {}\n", name, kv.value.lib);
         }
-        try buffered.flush();
+        try fns_txt.flush();
     }
 
     // Now the mapping of version and function to integer index is complete.
@@ -274,8 +272,7 @@ pub fn main() !void {
         const abilist_txt_path = try fs.path.join(allocator, [_][]const u8{ glibc_out_dir, "abi.txt" });
         const abilist_txt_file = try fs.File.openWrite(abilist_txt_path);
         defer abilist_txt_file.close();
-        var buffered = std.io.BufferedOutStream(fs.File.WriteError).init(&abilist_txt_file.outStream().stream);
-        const abilist_txt = &buffered.stream;
+        var abilist_txt = std.io.BufferedOutStream(fs.File).init(&abilist_txt_file);
 
         // first iterate over the abi lists
         for (abi_lists) |*abi_list, abi_index| {
@@ -299,7 +296,7 @@ pub fn main() !void {
             }
         }
 
-        try buffered.flush();
+        try abilist_txt.flush();
     }
 }
 
