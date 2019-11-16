@@ -199,8 +199,10 @@ pub fn LinearFifo(
             return c;
         }
 
+        pub const ReadError = error{};
+
         /// Read data from the fifo into `dst`, returns number of bytes copied.
-        pub fn read(self: *Self, dst: []T) usize {
+        pub fn read(self: *Self, dst: []T) ReadError!usize {
             var dst_left = dst;
 
             while (dst_left.len > 0) {
@@ -214,6 +216,11 @@ pub fn LinearFifo(
 
             return dst.len - dst_left.len;
         }
+
+        pub usingnamespace if (T == u8)
+            std.io.InStream(Self)
+        else
+            struct {};
 
         /// Returns number of bytes available in fifo
         pub fn writableLength(self: Self) usize {
@@ -283,20 +290,18 @@ pub fn LinearFifo(
             self.update(1);
         }
 
+        pub const WriteError = error{OutOfMemory};
+
         /// Appends the data in `src` to the fifo.
         /// Allocates more memory as necessary
-        pub fn write(self: *Self, src: []const T) !void {
+        pub fn write(self: *Self, src: []const T) WriteError!void {
             try self.ensureUnusedCapacity(src.len);
 
             return self.writeAssumeCapacity(src);
         }
 
         pub usingnamespace if (T == u8)
-            struct {
-                pub fn print(self: *Self, comptime format: []const u8, args: ...) !void {
-                    return std.fmt.format(self, error{OutOfMemory}, Self.write, format, args);
-                }
-            }
+            std.io.OutStream(Self)
         else
             struct {};
 
@@ -398,10 +403,10 @@ test "LinearFifo(u8, .Dynamic)" {
     {
         try fifo.unget("prependedstring");
         var result: [30]u8 = undefined;
-        testing.expectEqualSlices(u8, "prependedstringabcdefghij", result[0..fifo.read(&result)]);
+        testing.expectEqualSlices(u8, "prependedstringabcdefghij", result[0..try fifo.read(&result)]);
         try fifo.unget("b");
         try fifo.unget("a");
-        testing.expectEqualSlices(u8, "ab", result[0..fifo.read(&result)]);
+        testing.expectEqualSlices(u8, "ab", result[0..try fifo.read(&result)]);
     }
 
     fifo.shrink(0);
@@ -409,7 +414,7 @@ test "LinearFifo(u8, .Dynamic)" {
     {
         try fifo.print("{}, {}!", "Hello", "World");
         var result: [30]u8 = undefined;
-        testing.expectEqualSlices(u8, "Hello, World!", result[0..fifo.read(&result)]);
+        testing.expectEqualSlices(u8, "Hello, World!", result[0..try fifo.read(&result)]);
         testing.expectEqual(@as(usize, 0), fifo.readableLength());
     }
 }

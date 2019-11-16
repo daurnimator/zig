@@ -97,7 +97,7 @@ pub fn BufferedInStreamCustom(comptime buffer_size: usize, comptime UnbufferedIn
         pub fn read(self: *Self, dest: []u8) ReadError!usize {
             var dest_index: usize = 0;
             while (dest_index < dest.len) {
-                const written = self.fifo.read(dest[dest_index..]);
+                const written = try self.fifo.read(dest[dest_index..]);
                 if (written == 0) {
                     // fifo empty, fill it
                     const writable = self.fifo.writableSlice(0);
@@ -208,7 +208,7 @@ pub fn PeekStream(comptime buffer_type: std.fifo.LinearFifoBufferType, comptime 
 
         pub fn read(self: *Self, dest: []u8) ReadError!usize {
             // copy over anything putBack()'d
-            var dest_index = self.fifo.read(dest);
+            var dest_index = try self.fifo.read(dest);
             if (dest_index == dest.len) return dest_index;
 
             // ask the backing stream for more
