@@ -82,6 +82,17 @@ pub fn LinearFifo(
             if (buffer_type == .Dynamic) self.allocator.free(self.buf);
         }
 
+        pub fn replaceContents(self: *Self, m: []const u8) !void {
+            self.head = 0; // reset head before .ensureCapacity so that realign is a no-op
+            try self.ensureCapacity(m.len);
+            self.count = m.len;
+            mem.copy(T, self.buf[0..m.len], m);
+            { // set unused area to undefined
+                const unused = @sliceToBytes(self.buf[m.len..]);
+                @memset(unused.ptr, undefined, unused.len);
+            }
+        }
+
         pub fn realign(self: *Self) void {
             if (self.buf.len - self.head >= self.count) {
                 // this copy overlaps
