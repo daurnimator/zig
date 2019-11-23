@@ -23,6 +23,7 @@ pub const LinearFifoBufferType = union(enum) {
 pub fn LinearFifo(
     comptime T: type,
     comptime buffer_type: LinearFifoBufferType,
+    comptime zero_terminate: bool,
 ) type {
     const autoalign = false;
 
@@ -31,6 +32,8 @@ pub fn LinearFifo(
         .Slice => false, // Any size slice could be passed in
         .Dynamic => true, // This could be configurable in future
     };
+
+    if (zero_terminate) assert(buffer_type.Static > 0);
 
     return struct {
         allocator: if (buffer_type == .Dynamic) *Allocator else void,
@@ -50,7 +53,7 @@ pub fn LinearFifo(
                 pub fn init() Self {
                     return .{
                         .allocator = {},
-                        .buf = undefined,
+                        .buf = if (zero_terminate) [_]T{0} ** buffer_type.Static else undefined,
                         .head = 0,
                         .count = 0,
                     };
@@ -58,6 +61,7 @@ pub fn LinearFifo(
             },
             .Slice => struct {
                 pub fn init(buf: []T) Self {
+                    @memset(buf.ptr, if (zero_terminate) 0 else undefined, buf.len);
                     return .{
                         .allocator = {},
                         .buf = buf,
@@ -87,9 +91,9 @@ pub fn LinearFifo(
             try self.ensureCapacity(m.len);
             self.count = m.len;
             mem.copy(T, self.buf[0..m.len], m);
-            { // set unused area to undefined
+            { // set unused area to 0/undefined
                 const unused = @sliceToBytes(self.buf[m.len..]);
-                @memset(unused.ptr, undefined, unused.len);
+                @memset(unused.ptr, if (zero_terminate) 0 else undefined, unused.len);
             }
         }
 
@@ -111,9 +115,9 @@ pub fn LinearFifo(
                     self.head -= n;
                 }
             }
-            { // set unused area to undefined
+            { // set unused area to 0/undefined
                 const unused = @sliceToBytes(self.buf[self.count..]);
-                @memset(unused.ptr, undefined, unused.len);
+                @memset(unused.ptr, if (zero_terminate) 0 else undefined, unused.len);
             }
         }
 
@@ -122,7 +126,11 @@ pub fn LinearFifo(
             assert(size >= self.count);
             if (buffer_type == .Dynamic) {
                 self.realign();
-                self.buf = self.allocator.realloc(self.buf, size) catch |e| switch (e) {
+                var min_size = size;
+                if (zero_terminate) {
+                    min_size += 1;
+                }
+                self.buf = self.allocator.realloc(self.buf, min_size) catch |e| switch (e) {
                     error.OutOfMemory => return, // no problem, capacity is still correct then.
                 };
             }
@@ -130,11 +138,20 @@ pub fn LinearFifo(
 
         /// Ensure that the buffer can fit at least `size` items
         pub fn ensureCapacity(self: *Self, size: usize) !void {
-            if (self.buf.len >= size) return;
+            var new_size = size;
+            if (zero_terminate) {
+                new_size += 1;
+            }
+            if (self.buf.len >= new_size) return;
             if (buffer_type == .Dynamic) {
                 self.realign();
-                const new_size = if (powers_of_two) math.ceilPowerOfTwo(usize, size) catch return error.OutOfMemory else size;
-                self.buf = try self.allocator.realloc(self.buf, new_size);
+                new_size = if (powers_of_two) math.ceilPowerOfTwo(usize, new_size) catch return error.OutOfMemory else size;
+                const new_buf = try self.allocator.realloc(self.buf, new_size);
+                if (zero_terminate) {
+                    const unused = @sliceToBytes(new_buf[self.buf.len..]);
+                    @memset(unused.ptr, 0, unused.len);
+                }
+                self.buf = new_buf;
             } else {
                 return error.OutOfMemory;
             }
@@ -183,19 +200,33 @@ pub fn LinearFifo(
             }
         }
 
+        /// Returns a null-termated readable slice from `offset`
+        pub fn readableNullSlice(self: Self) []const T {
+            if (offset > self.count) return [_]T{0};
+
+            var start = self.head;
+            var end = self.head + self.count;
+            if (end < self.buf.len) {
+                return self[start..end];
+            } else {
+                self.realign();
+                return self[0..self.count];
+            }
+        }
+
         /// Discard first `count` bytes of readable data
         pub fn discard(self: *Self, count: usize) void {
             assert(count <= self.count);
-            { // set old range to undefined. Note: may be wrapped around
+            { // set old range to 0/undefined. Note: may be wrapped around
                 const slice = self.readableSliceMut(0);
                 if (slice.len >= count) {
                     const unused = @sliceToBytes(slice[0..count]);
-                    @memset(unused.ptr, undefined, unused.len);
+                    @memset(unused.ptr, if (zero_terminate) 0 else undefined, unused.len);
                 } else {
                     const unused = @sliceToBytes(slice[0..]);
-                    @memset(unused.ptr, undefined, unused.len);
+                    @memset(unused.ptr, if (zero_terminate) 0 else undefined, unused.len);
                     const unused2 = @sliceToBytes(self.readableSliceMut(slice.len)[0 .. count - slice.len]);
-                    @memset(unused2.ptr, undefined, unused2.len);
+                    @memset(unused2.ptr, if (zero_terminate) 0 else undefined, unused2.len);
                 }
             }
             if (autoalign and self.count == count) {
@@ -271,7 +302,7 @@ pub fn LinearFifo(
 
         /// Returns number of bytes available in fifo
         pub fn writableLength(self: Self) usize {
-            return self.buf.len - self.count;
+            return self.buf.len - self.count - if (zero_terminate) 1 else 0;
         }
 
         /// Returns the first section of writable buffer
