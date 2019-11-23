@@ -171,6 +171,18 @@ pub fn LinearFifo(
             return self.readableSliceMut(offset);
         }
 
+        /// Returns a readable slice from `offset`
+        pub fn readableSliceFull(self: Self) []const T {
+            var start = self.head;
+            var end = self.head + self.count;
+            if (end < self.buf.len) {
+                return self[start..end];
+            } else {
+                self.realign();
+                return self[0..self.count];
+            }
+        }
+
         /// Discard first `count` bytes of readable data
         pub fn discard(self: *Self, count: usize) void {
             assert(count <= self.count);
