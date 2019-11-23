@@ -238,6 +238,37 @@ pub fn LinearFifo(
             return dst.len - dst_left.len;
         }
 
+        fn eqlCheck(self: Self, offset: usize, m: []const T) bool {
+            const slice = self.readableSlice(offset);
+            if (slice.len >= m.len) {
+                return mem.eql(T, slice[0..m.len], m);
+            } else {
+                const slice2 = self.readableSlice(offset + slice.len);
+                if (slice.len + slice2.len < m.len) {
+                    // not enough data
+                    return false;
+                }
+
+                if (!mem.eql(T, slice, m[0..slice.len])) return false;
+                return mem.eql(T, slice2[0..m.len - slice.len], m[slice.len..]);
+            }
+        }
+
+        pub fn eql(self: Self, m: []const T) bool {
+            if (self.readableLen() != m.len) return false;
+            return self.eqlCheck(0, m);
+        }
+
+        pub fn startsWith(self: Self, m: []const u8) bool {
+            return self.eqlCheck(0, m);
+        }
+
+        pub fn endsWith(self: Self, m: []const u8) bool {
+            const len = self.readableLen();
+            if (len < m.len) return false;
+            return self.eqlCheck(len - m.len, m);
+        }
+
         /// Returns number of bytes available in fifo
         pub fn writableLength(self: Self) usize {
             return self.buf.len - self.count;
