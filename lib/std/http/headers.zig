@@ -138,18 +138,17 @@ pub const Headers = struct {
         return self.data.iterator();
     }
 
-    pub fn append(self: *Self, name: []const u8, value: []const u8, never_index: ?bool) !void {
-        const allocator = self.data.allocator;
+    /// Same as .append() but `value_owned` has already been allocated by the allocator
+    pub fn appendOwned(self: *Self, name: []const u8, value_owned: []u8, never_index: ?bool) !void {
         const n = self.data.count() + 1;
         try self.data.ensureCapacity(n);
         var name_owned: []const u8 = undefined;
-        const value_owned = try mem.dupe(allocator, u8, value);
-        errdefer allocator.free(value_owned);
         if (self.index.get(name)) |kv| {
             name_owned = kv.key;
             var dex = &kv.value;
             try dex.append(n - 1);
         } else {
+            const allocator = self.data.allocator;
             name_owned = try mem.dupe(allocator, u8, name);
             errdefer allocator.free(name_owned);
             var dex = HeaderIndexList.init(allocator);
@@ -160,6 +159,12 @@ pub const Headers = struct {
         // Do not raise any errors here or .index will be out of sync with .data
         const entry = HeaderEntry.init(name_owned, value_owned, never_index);
         self.data.appendAssumeCapacity(entry);
+    }
+
+    pub fn append(self: *Self, name: []const u8, value: []const u8, never_index: ?bool) !void {
+        const value_owned = try mem.dupe(self.data.allocator, u8, value);
+        errdefer self.data.allocator.free(value_owned);
+        return self.appendOwned(name, value_owned, never_index);
     }
 
     /// If the header already exists, replace the current value, otherwise append it to the list of headers.
