@@ -161,6 +161,19 @@ pub fn LinearFifo(
             return self.readableSliceMut(offset);
         }
 
+        /// Returns a readable slice of at least `size` items.
+        pub fn readableWithSize(self: *Self, offset: usize, min_size: usize) ![]const T {
+            if (self.readableLength() < offset + min_size) return error.EndOfStream;
+
+            // try to avoid realigning buffer
+            var slice = self.readableSlice(offset);
+            if (slice.len < min_size) {
+                self.realign();
+                slice = self.readableSlice(offset);
+            }
+            return slice;
+        }
+
         /// Discard first `count` bytes of readable data
         pub fn discard(self: *Self, count: usize) void {
             assert(count <= self.count);
@@ -368,7 +381,10 @@ test "LinearFifo(u8, .Dynamic)" {
         }
         testing.expectEqual(@as(usize, 10), fifo.readableLength());
         testing.expectEqualSlices(u8, "HELLOHELLO", fifo.readableSlice(0));
+        testing.expectEqualSlices(u8, "HELLOHELLO", try fifo.readableWithSize(0, 10));
     }
+
+    testing.expectError(error.EndOfStream, fifo.readableWithSize(0, 11));
 
     {
         testing.expectEqual(@as(u8, 'H'), try fifo.readItem());
@@ -435,6 +451,7 @@ test "LinearFifo" {
 
             try fifo.write(&[_]T{ 0, 1, 1, 0, 1 });
             testing.expectEqual(@as(usize, 5), fifo.readableLength());
+            testing.expectError(error.EndOfStream, fifo.readableWithSize(0, 6));
 
             {
                 testing.expectEqual(@as(T, 0), try fifo.readItem());
