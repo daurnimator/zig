@@ -248,6 +248,29 @@ pub const SliceInStream = struct {
     pub usingnamespace InStream(Self);
 };
 
+pub const null_in_stream = NullInStream.init();
+
+/// An InStream that doesn't write to anything.
+pub const NullInStream = struct {
+    pub fn init() NullInStream {
+        return .{};
+    }
+
+    pub const ReadError = error{};
+
+    pub fn read(self: NullInStream, dst: []const u8) ReadError!usize {
+        return 0;
+    }
+
+    pub usingnamespace InStream(NullInStream);
+};
+
+test "io.NullInStream" {
+    var null_stream = NullInStream.init();
+    var buf = [_]u8{undefined} ** 20;
+    testing.expect(@as(usize, 0), null_stream.read(&buf));
+}
+
 /// Creates a stream which allows for reading bit fields from another stream
 pub fn BitInStream(endian: builtin.Endian, comptime BaseStream: type) type {
     return struct {
