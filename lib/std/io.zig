@@ -85,10 +85,13 @@ pub fn BufferedInStreamCustom(comptime buffer_size: usize, comptime UnbufferedIn
         const FifoType = std.fifo.LinearFifo(u8, std.fifo.LinearFifoBufferType{ .Static = buffer_size });
         fifo: FifoType,
 
+        endOfStream: bool,
+
         pub fn init(unbuffered_in_stream: UnbufferedInStream) Self {
             return Self{
                 .unbuffered_in_stream = unbuffered_in_stream,
                 .fifo = FifoType.init(),
+                .endOfStream = false,
             };
         }
 
@@ -99,11 +102,13 @@ pub fn BufferedInStreamCustom(comptime buffer_size: usize, comptime UnbufferedIn
             while (dest_index < dest.len) {
                 const written = try self.fifo.read(dest[dest_index..]);
                 if (written == 0) {
+                    if (self.endOfStream) return error.EndOfStream;
                     // fifo empty, fill it
                     const writable = self.fifo.writableSlice(0);
                     assert(writable.len > 0);
                     const n = try self.unbuffered_in_stream.read(writable);
                     if (n == 0) {
+                        self.endOfStream = true;
                         // reading from the unbuffered stream returned nothing
                         // so we have nothing left to read.
                         return dest_index;
