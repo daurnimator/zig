@@ -155,7 +155,7 @@ pub const Headers = struct {
             var dex = HeaderIndexList.init(allocator);
             try dex.append(n - 1);
             errdefer dex.deinit();
-            _ = try self.index.put(name, dex);
+            _ = try self.index.put(name_owned, dex);
         }
         // Do not raise any errors here or .index will be out of sync with .data
         const entry = HeaderEntry.init(name_owned, value_owned, never_index);
