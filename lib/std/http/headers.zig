@@ -27,35 +27,18 @@ fn never_index_default(name: []const u8) bool {
 }
 
 const HeaderEntry = struct {
-    allocator: *Allocator,
     name: []const u8,
     value: []u8,
     never_index: bool,
 
     const Self = @This();
 
-    fn init(allocator: *Allocator, name: []const u8, value: []const u8, never_index: ?bool) !Self {
-        return Self{
-            .allocator = allocator,
-            .name = name, // takes reference
-            .value = try mem.dupe(allocator, u8, value),
+    fn init(name: []const u8, value: []u8, never_index: ?bool) Self {
+        return .{
+            .name = name,
+            .value = value,
             .never_index = never_index orelse never_index_default(name),
         };
-    }
-
-    fn deinit(self: Self) void {
-        self.allocator.free(self.value);
-    }
-
-    pub fn modify(self: *Self, value: []const u8, never_index: ?bool) !void {
-        const old_len = self.value.len;
-        if (value.len > old_len) {
-            self.value = try self.allocator.realloc(self.value, value.len);
-        } else if (value.len < old_len) {
-            self.value = self.allocator.shrink(self.value, value.len);
-        }
-        mem.copy(u8, self.value, value);
-        self.never_index = never_index orelse never_index_default(self.name);
     }
 
     fn compare(a: HeaderEntry, b: HeaderEntry) bool {
@@ -88,18 +71,11 @@ var test_fba_state = std.heap.FixedBufferAllocator.init(&test_memory);
 const test_allocator = &test_fba_state.allocator;
 
 test "HeaderEntry" {
-    var e = try HeaderEntry.init(test_allocator, "foo", "bar", null);
-    defer e.deinit();
+    var buf: [3]u8 = "bar".*;
+    var e = HeaderEntry.init("foo", &buf, null);
     testing.expectEqualSlices(u8, "foo", e.name);
     testing.expectEqualSlices(u8, "bar", e.value);
     testing.expectEqual(false, e.never_index);
-
-    try e.modify("longer value", null);
-    testing.expectEqualSlices(u8, "longer value", e.value);
-
-    // shorter value
-    try e.modify("x", null);
-    testing.expectEqualSlices(u8, "x", e.value);
 }
 
 const HeaderList = std.ArrayList(HeaderEntry);
@@ -135,7 +111,7 @@ pub const Headers = struct {
         {
             var it = self.data.iterator();
             while (it.next()) |entry| {
-                entry.deinit();
+                self.allocator.free(entry.value);
             }
             self.data.deinit();
         }
@@ -166,22 +142,23 @@ pub const Headers = struct {
     pub fn append(self: *Self, name: []const u8, value: []const u8, never_index: ?bool) !void {
         const n = self.data.count() + 1;
         try self.data.ensureCapacity(n);
-        var entry: HeaderEntry = undefined;
+        var name_owned: []const u8 = undefined;
+        const value_owned = try mem.dupe(self.allocator, u8, value);
+        errdefer self.allocator.free(value_owned);
         if (self.index.get(name)) |kv| {
-            entry = try HeaderEntry.init(self.allocator, kv.key, value, never_index);
-            errdefer entry.deinit();
+            name_owned = kv.key;
             var dex = &kv.value;
             try dex.append(n - 1);
         } else {
-            const name_dup = try mem.dupe(self.allocator, u8, name);
-            errdefer self.allocator.free(name_dup);
-            entry = try HeaderEntry.init(self.allocator, name_dup, value, never_index);
-            errdefer entry.deinit();
+            name_owned = try mem.dupe(self.allocator, u8, name);
+            errdefer self.allocator.free(name_owned);
             var dex = HeaderIndexList.init(self.allocator);
             try dex.append(n - 1);
             errdefer dex.deinit();
             _ = try self.index.put(name, dex);
         }
+        // Do not raise any errors here or .index will be out of sync with .data
+        const entry = HeaderEntry.init(name_owned, value_owned, never_index);
         self.data.appendAssumeCapacity(entry);
     }
 
@@ -193,7 +170,8 @@ pub const Headers = struct {
             if (dex.count() != 1)
                 return error.CannotUpsertMultiValuedField;
             var e = &self.data.at(dex.at(0));
-            try e.modify(value, never_index);
+            try mem.replace(self.allocator, u8, &e.value, value);
+            e.never_index = never_index orelse never_index_default(name);
         } else {
             try self.append(name, value, never_index);
         }
@@ -215,7 +193,7 @@ pub const Headers = struct {
                 const data_index = dex.at(i);
                 const removed = self.data.orderedRemove(data_index);
                 assert(mem.eql(u8, removed.name, name));
-                removed.deinit();
+                self.allocator.free(removed.value);
             }
             dex.deinit();
             self.allocator.free(kv.key);
@@ -236,11 +214,11 @@ pub const Headers = struct {
             // was last item; delete the index
             _ = self.index.remove(kv.key);
             dex.deinit();
-            removed.deinit();
+            self.allocator.free(removed.value);
             self.allocator.free(kv.key);
         } else {
             dex.shrink(dex.count() - 1);
-            removed.deinit();
+            self.allocator.free(removed.value);
         }
         // if it was the last item; no need to rebuild index
         if (i != self.data.count()) {
@@ -258,11 +236,11 @@ pub const Headers = struct {
             // was last item; delete the index
             _ = self.index.remove(kv.key);
             dex.deinit();
-            removed.deinit();
+            self.allocator.free(removed.value);
             self.allocator.free(kv.key);
         } else {
             dex.shrink(dex.count() - 1);
-            removed.deinit();
+            self.allocator.free(removed.value);
         }
         // if it was the last item; no need to rebuild index
         if (i != self.data.count()) {
