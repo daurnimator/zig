@@ -121,6 +121,40 @@ pub fn BufferedInStreamCustom(comptime buffer_size: usize, comptime UnbufferedIn
         }
 
         pub usingnamespace InStream(Self);
+
+        pub fn fill(self: *Self, min_size: usize) !void {
+            if (self.fifo.readableLength() >= min_size) return;
+            if (self.endOfStream) return error.EndOfStream;
+
+            try self.fifo.ensureCapacity(min_size);
+            while (self.fifo.readableLength() < min_size) {
+                const got = try self.unbuffered_in_stream.read(self.fifo.writableSlice(0));
+                if (got == 0) {
+                    self.endOfStream = true;
+                    return error.EndOfStream;
+                }
+                self.fifo.update(got);
+            }
+        }
+
+        /// Returns offset of the delimiter
+        pub fn fillUntilDelimiter(self: *Self, offset: usize, delimiter: u8) !usize {
+            // check that offset is within bytes already seen.
+            // XXX: this might not be desirable e.g. if you have a fixed size header followed by a null terminated body
+            assert(offset <= self.fifo.readableLength());
+
+            var readOffset: usize = offset;
+            while (true) {
+                const read_slice = self.fifo.readableSlice(readOffset);
+                if (mem.indexOfScalar(u8, read_slice, delimiter)) |idx| {
+                    return readOffset + idx;
+                }
+                readOffset += read_slice.len;
+                if (self.fifo.readableLength() == readOffset) {
+                    try self.fill(1);
+                }
+            }
+        }
     };
 }
 
