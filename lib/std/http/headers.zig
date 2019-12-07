@@ -84,7 +84,6 @@ const HeaderIndex = std.StringHashMap(HeaderIndexList);
 
 pub const Headers = struct {
     // the owned header field name is stored in the index as part of the key
-    allocator: *Allocator,
     data: HeaderList,
     index: HeaderIndex,
 
@@ -92,26 +91,26 @@ pub const Headers = struct {
 
     pub fn init(allocator: *Allocator) Self {
         return Self{
-            .allocator = allocator,
             .data = HeaderList.init(allocator),
             .index = HeaderIndex.init(allocator),
         };
     }
 
     pub fn deinit(self: Self) void {
+        const allocator = self.data.allocator;
         {
             var it = self.index.iterator();
             while (it.next()) |kv| {
                 var dex = &kv.value;
                 dex.deinit();
-                self.allocator.free(kv.key);
+                allocator.free(kv.key);
             }
             self.index.deinit();
         }
         {
             var it = self.data.iterator();
             while (it.next()) |entry| {
-                self.allocator.free(entry.value);
+                allocator.free(entry.value);
             }
             self.data.deinit();
         }
@@ -140,19 +139,20 @@ pub const Headers = struct {
     }
 
     pub fn append(self: *Self, name: []const u8, value: []const u8, never_index: ?bool) !void {
+        const allocator = self.data.allocator;
         const n = self.data.count() + 1;
         try self.data.ensureCapacity(n);
         var name_owned: []const u8 = undefined;
-        const value_owned = try mem.dupe(self.allocator, u8, value);
-        errdefer self.allocator.free(value_owned);
+        const value_owned = try mem.dupe(allocator, u8, value);
+        errdefer allocator.free(value_owned);
         if (self.index.get(name)) |kv| {
             name_owned = kv.key;
             var dex = &kv.value;
             try dex.append(n - 1);
         } else {
-            name_owned = try mem.dupe(self.allocator, u8, name);
-            errdefer self.allocator.free(name_owned);
-            var dex = HeaderIndexList.init(self.allocator);
+            name_owned = try mem.dupe(allocator, u8, name);
+            errdefer allocator.free(name_owned);
+            var dex = HeaderIndexList.init(allocator);
             try dex.append(n - 1);
             errdefer dex.deinit();
             _ = try self.index.put(name, dex);
@@ -170,7 +170,7 @@ pub const Headers = struct {
             if (dex.count() != 1)
                 return error.CannotUpsertMultiValuedField;
             var e = &self.data.at(dex.at(0));
-            try mem.replace(self.allocator, u8, &e.value, value);
+            try mem.replace(self.data.allocator, u8, &e.value, value);
             e.never_index = never_index orelse never_index_default(name);
         } else {
             try self.append(name, value, never_index);
@@ -185,6 +185,7 @@ pub const Headers = struct {
     /// Returns boolean indicating if something was deleted.
     pub fn delete(self: *Self, name: []const u8) bool {
         if (self.index.remove(name)) |kv| {
+            const allocator = self.data.allocator;
             var dex = &kv.value;
             // iterate backwards
             var i = dex.count();
@@ -193,10 +194,10 @@ pub const Headers = struct {
                 const data_index = dex.at(i);
                 const removed = self.data.orderedRemove(data_index);
                 assert(mem.eql(u8, removed.name, name));
-                self.allocator.free(removed.value);
+                allocator.free(removed.value);
             }
             dex.deinit();
-            self.allocator.free(kv.key);
+            allocator.free(kv.key);
             self.rebuild_index();
             return true;
         } else {
@@ -207,6 +208,7 @@ pub const Headers = struct {
     /// Removes the element at the specified index.
     /// Moves items down to fill the empty space.
     pub fn orderedRemove(self: *Self, i: usize) void {
+        const allocator = self.data.allocator;
         const removed = self.data.orderedRemove(i);
         const kv = self.index.get(removed.name).?;
         var dex = &kv.value;
@@ -214,11 +216,11 @@ pub const Headers = struct {
             // was last item; delete the index
             _ = self.index.remove(kv.key);
             dex.deinit();
-            self.allocator.free(removed.value);
-            self.allocator.free(kv.key);
+            allocator.free(removed.value);
+            allocator.free(kv.key);
         } else {
             dex.shrink(dex.count() - 1);
-            self.allocator.free(removed.value);
+            allocator.free(removed.value);
         }
         // if it was the last item; no need to rebuild index
         if (i != self.data.count()) {
@@ -229,6 +231,7 @@ pub const Headers = struct {
     /// Removes the element at the specified index.
     /// The empty slot is filled from the end of the list.
     pub fn swapRemove(self: *Self, i: usize) void {
+        const allocator = self.data.allocator;
         const removed = self.data.swapRemove(i);
         const kv = self.index.get(removed.name).?;
         var dex = &kv.value;
@@ -236,11 +239,11 @@ pub const Headers = struct {
             // was last item; delete the index
             _ = self.index.remove(kv.key);
             dex.deinit();
-            self.allocator.free(removed.value);
-            self.allocator.free(kv.key);
+            allocator.free(removed.value);
+            allocator.free(kv.key);
         } else {
             dex.shrink(dex.count() - 1);
-            self.allocator.free(removed.value);
+            allocator.free(removed.value);
         }
         // if it was the last item; no need to rebuild index
         if (i != self.data.count()) {
