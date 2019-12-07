@@ -1,8 +1,10 @@
 test "std.http" {
     _ = @import("http/headers.zig");
+    _ = @import("http/h1_connection.zig");
 }
 
 pub const Headers = @import("http/headers.zig").Headers;
+pub const HTTP1Connection = @import("http/h1_connection.zig").HTTP1Connection;
 
 /// Valid token characters
 const tchars = blk: {

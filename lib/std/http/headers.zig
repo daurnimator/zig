@@ -285,6 +285,12 @@ pub const Headers = struct {
         return buf;
     }
 
+    pub fn getOnly(self: Self, name: []const u8) !?HeaderEntry {
+        const dex = self.getIndices(name) orelse return null;
+        if (dex.count() != 1) return error.MultipleHeaders;
+        return self.data.at(dex.at(0));
+    }
+
     /// Returns all headers with the given name as a comma separated string.
     ///
     /// Useful for HTTP headers that follow RFC-7230 section 3.2.2:
