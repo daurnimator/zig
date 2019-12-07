@@ -1225,7 +1225,7 @@ pub fn DwarfInfo(comptime DwarfSeekableInStream: type) type {
             if (self.getLineNumberInfo(compile_unit.*, address)) |line_info| {
                 defer line_info.deinit();
                 const symbol_name = self.getSymbolName(address) orelse "???";
-                try printLineInfo(
+                try noasync printLineInfo(
                     out_stream,
                     line_info,
                     address,
