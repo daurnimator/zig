@@ -121,6 +121,52 @@ pub fn BufferedInStreamCustom(comptime buffer_size: usize, comptime UnbufferedIn
         }
 
         pub usingnamespace InStream(Self);
+
+        pub fn fill(self: *Self, offset: usize, n: usize) !void {
+            const have = self.fifo.readableLength();
+            if (have >= n + offset) return;
+
+            if (self.endOfStream) return error.EndOfStream;
+
+            const writable = try self.fifo.writeableWithSize(offset, n);
+            var left: usize = n;
+            while (left > 0) {
+                const got = try self.unbuffered_in_stream.read(writable[left..]);
+                if (got == 0) {
+                    self.endOfStream = true;
+                    return error.EndOfStream;
+                }
+                left -= got;
+            }
+        }
+
+        /// Returns offset of the delimiter
+        pub fn fillUntilDelimiter(self: *Self, offset: usize, delimiter: u8) !usize {
+            // check that offset is within bytes already seen.
+            // XXX: this might not be desirable e.g. if you have a fixed size header followed by a null terminated body
+            assert(offset <= self.fifo.readableLength());
+
+            var readOffset: usize = offset;
+            while (true) {
+                const read_slice = self.fifo.readableSlice(readOffset);
+                if (mem.indexOfScalar(u8, read_slice, delimiter)) |idx| {
+                    return readOffset + idx;
+                }
+                readOffset += read_slice.len;
+                if (self.fifo.readableLength() == readOffset) {
+                    if (self.endOfStream) return error.EndOfStream;
+
+                    try self.fifo.ensureUnusedCapacity(1);
+                    const write_slice = self.fifo.writableSlice(0);
+                    const n = try self.unbuffered_in_stream.read(write_slice);
+                    if (n == 0) {
+                        self.endOfStream = true;
+                        return error.EndOfStream;
+                    }
+                    self.fifo.update(n);
+                }
+            }
+        }
     };
 }
 
