@@ -241,16 +241,17 @@ pub fn LinearFifo(
             }
         }
 
-        /// Returns a writable buffer of at least `size` bytes, allocating memory as needed.
+        /// Returns a writable buffer of at least `min_size` items, allocating memory as needed.
+        /// If you want an exact size, just slice the result of this.
         /// Use `fifo.update` once you've written data to it.
-        pub fn writeableWithSize(self: *Self, size: usize) ![]T {
-            try self.ensureUnusedCapacity(size);
+        pub fn writeableWithSize(self: *Self, offset: usize, min_size: usize) ![]T {
+            try self.ensureUnusedCapacity(min_size);
 
             // try to avoid realigning buffer
-            var slice = self.writableSlice(0);
-            if (slice.len < size) {
+            var slice = self.writableSlice(offset);
+            if (slice.len < min_size) {
                 self.realign();
-                slice = self.writableSlice(0);
+                slice = self.writableSlice(offset);
             }
             return slice;
         }
@@ -391,7 +392,7 @@ test "LinearFifo(u8, .Dynamic)" {
     }
 
     {
-        const buf = try fifo.writeableWithSize(12);
+        const buf = try fifo.writeableWithSize(0, 12);
         testing.expectEqual(@as(usize, 12), buf.len);
         var i: u8 = 0;
         while (i < 10) : (i += 1) {
