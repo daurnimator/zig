@@ -385,6 +385,17 @@ pub fn dupe(allocator: *Allocator, comptime T: type, m: []const T) ![]T {
     return new_buf;
 }
 
+/// Replaces a slice (resizing if necessary) with the contents of another
+/// The old slice must have been allocated with the same allocator
+pub fn replace(allocator: *Allocator, comptime T: type, old: *[]T, new: []const T) !void {
+    if (new.len > old.len) {
+        old.* = try allocator.realloc(old.*, new.len);
+    } else if (new.len < old.len) {
+        old.* = allocator.shrink(old.*, new.len);
+    }
+    copy(T, old.*, new);
+}
+
 /// Remove values from the beginning of a slice.
 pub fn trimLeft(comptime T: type, slice: []const T, values_to_strip: []const T) []const T {
     var begin: usize = 0;
