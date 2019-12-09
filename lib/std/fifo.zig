@@ -146,13 +146,14 @@ pub fn LinearFifo(
             if (offset > self.count) return &[_]T{};
 
             var start = self.head + offset;
+            var end: usize = undefined;
             if (start >= self.buf.len) {
                 start -= self.buf.len;
-                return self.buf[start .. self.count - offset];
+                end = self.count - offset;
             } else {
-                const end = math.min(self.head + self.count, self.buf.len);
-                return self.buf[start..end];
+                end = math.min(self.count, self.buf.len - self.head) - offset;
             }
+            return self.buf[start..][0..end];
         }
 
         /// Returns a readable slice from `offset`
