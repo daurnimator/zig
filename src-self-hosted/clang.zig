@@ -1072,6 +1072,8 @@ pub extern fn ZigClangParenExpr_getSubExpr(*const ZigClangParenExpr) *const ZigC
 
 pub extern fn ZigClangFieldDecl_isAnonymousStructOrUnion(*const struct_ZigClangFieldDecl) bool;
 pub extern fn ZigClangFieldDecl_isBitField(*const struct_ZigClangFieldDecl) bool;
+pub extern fn ZigClangFieldDecl_isUnnamedBitfield(*const ZigClangFieldDecl) bool;
+pub extern fn ZigClangFieldDecl_getBitWidthValue(*const ZigClangFieldDecl, *const ZigClangASTContext) c_uint;
 pub extern fn ZigClangFieldDecl_getType(*const struct_ZigClangFieldDecl) struct_ZigClangQualType;
 pub extern fn ZigClangFieldDecl_getLocation(*const struct_ZigClangFieldDecl) struct_ZigClangSourceLocation;
 

@@ -10,6 +10,7 @@ const ctok = @import("c_tokenizer.zig");
 const CToken = ctok.CToken;
 const mem = std.mem;
 const math = std.math;
+const CInt = @import("c_int.zig").CInt;
 
 const CallingConvention = std.builtin.CallingConvention;
 
@@ -768,33 +769,111 @@ fn transRecordDecl(c: *Context, record_decl: *const ZigClangRecordDecl) Error!?*
             .rbrace_token = undefined,
         };
 
+        var bitfield = false;
+        var bitcount: u32 = 0;
+
         var it = ZigClangRecordDecl_field_begin(record_def);
         const end_it = ZigClangRecordDecl_field_end(record_def);
         while (ZigClangRecordDecl_field_iterator_neq(it, end_it)) : (it = ZigClangRecordDecl_field_iterator_next(it)) {
             const field_decl = ZigClangRecordDecl_field_iterator_deref(it);
             const field_loc = ZigClangFieldDecl_getLocation(field_decl);
 
-            if (ZigClangFieldDecl_isBitField(field_decl)) {
-                const opaque = try transCreateNodeOpaqueType(c);
-                semicolon = try appendToken(c, .Semicolon, ";");
-                try emitWarning(c, field_loc, "{} demoted to opaque type - has bitfield", .{container_kind_name});
-                break :blk opaque;
-            }
+            var raw_name = if (ZigClangFieldDecl_isUnnamedBitfield(field_decl))
+                try std.fmt.allocPrint(c.a(), "_pad_{}", .{c.getMangle()})
+            else
+                try c.str(ZigClangNamedDecl_getName_bytes_begin(@ptrCast(*const ZigClangNamedDecl, field_decl)));
 
             var is_anon = false;
-            var raw_name = try c.str(ZigClangNamedDecl_getName_bytes_begin(@ptrCast(*const ZigClangNamedDecl, field_decl)));
             if (ZigClangFieldDecl_isAnonymousStructOrUnion(field_decl)) {
                 raw_name = try std.fmt.allocPrint(c.a(), "unnamed_{}", .{c.getMangle()});
                 is_anon = true;
             }
             const field_name = try appendIdentifier(c, raw_name);
             _ = try appendToken(c, .Colon, ":");
-            const field_type = transQualType(rp, ZigClangFieldDecl_getType(field_decl), field_loc) catch |err| switch (err) {
-                error.UnsupportedType => {
-                    try failDecl(c, record_loc, name, "unable to translate {} member type", .{container_kind_name});
-                    return null;
-                },
-                else => |e| return e,
+
+            const field_qt = ZigClangFieldDecl_getType(field_decl);
+            const field_type = if (ZigClangFieldDecl_isBitField(field_decl)) blk: {
+                if (!bitfield) {
+                    container_node.layout_token = try appendToken(c, .Keyword_packed, "packed");
+                    bitfield = true;
+                }
+                const sign = if (cIsSignedInteger(field_qt)) "i" else "u";
+                var width = ZigClangFieldDecl_getBitWidthValue(field_decl, c.clang_context);
+                // TODO use compilation target
+                var cint: CInt = undefined;
+                const qt_width: u32 = switch (ZigClangBuiltinType_getKind(@ptrCast(*const ZigClangBuiltinType, ZigClangQualType_getTypePtr(field_qt)))) {
+                    .Char_U, .UChar, .Char_S, .SChar => 8,
+                    .Short, .UShort => blk: {
+                        cint.id = .Short;
+                        break :blk cint.sizeInBits(.Native);
+                    },
+                    .Int, .UInt => blk: {
+                        cint.id = .Int;
+                        break :blk cint.sizeInBits(.Native);
+                    },
+                    .Long, .ULong => blk: {
+                        cint.id = .Long;
+                        break :blk cint.sizeInBits(.Native);
+                    },
+                    .LongLong, .ULongLong => blk: {
+                        cint.id = .LongLong;
+                        break :blk cint.sizeInBits(.Native);
+                    },
+                    .UInt128, .Int128 => 128,
+                    else => {
+                        try failDecl(c, record_loc, name, "unknown integer type", .{});
+                        return null;
+                    },
+                };
+                if (container_kind == .Keyword_union) {
+                    if (width == 0)
+                        continue;
+                }
+                if (width == 0) {
+                    width = (qt_width) - bitcount;
+                    bitcount = 0;
+                } else if (bitcount + width > qt_width) {
+                    const pad_width = qt_width - bitcount;
+
+                    const field_node = try c.a().create(ast.Node.ContainerField);
+                    field_node.* = .{
+                        .doc_comments = null,
+                        .comptime_token = null,
+                        .name_token = try appendTokenFmt(c, .Identifier, "_pad_{}", .{c.getMangle()}),
+                        .type_expr = undefined,
+                        .value_expr = null,
+                        .align_expr = null,
+                    };
+                    _ = try appendToken(c, .Colon, ":");
+                    const type_tok = try appendTokenFmt(c, .Identifier, "{}{}", .{ sign, pad_width });
+                    const type_node = try c.a().create(ast.Node.Identifier);
+                    type_node.* = .{
+                        .token = type_tok,
+                    };
+                    field_node.type_expr = &type_node.base;
+
+                    try container_node.fields_and_decls.push(&field_node.base);
+                    _ = try appendToken(c, .Comma, ",");
+
+                    bitcount = width;
+                } else {
+                    bitcount += width;
+                }
+                const type_tok = try appendTokenFmt(c, .Identifier, "{}{}", .{ sign, width });
+                const type_node = try c.a().create(ast.Node.Identifier);
+                type_node.* = .{
+                    .token = type_tok,
+                };
+                break :blk &type_node.base;
+            } else blk: {
+                bitcount = 0;
+                break :blk transQualType(rp, field_qt, field_loc) catch |err| switch (err) {
+                    error.UnsupportedType => {
+                        try failDecl(c, record_loc, name, "unable to translate {} member type", .{container_kind_name});
+                        return null;
+                    },
+                    else => |e| return e,
+                };
             };
 
             const field_node = try c.a().create(ast.Node.ContainerField);

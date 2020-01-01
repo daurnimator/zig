@@ -2748,6 +2748,17 @@ bool ZigClangFieldDecl_isAnonymousStructOrUnion(const ZigClangFieldDecl *field_d
     return reinterpret_cast<const clang::FieldDecl*>(field_decl)->isAnonymousStructOrUnion();
 }
 
+bool ZigClangFieldDecl_isUnnamedBitfield(const struct ZigClangFieldDecl *self) {
+    auto casted = reinterpret_cast<const clang::FieldDecl *>(self);
+    return casted->isUnnamedBitfield();
+}
+
+unsigned ZigClangFieldDecl_getBitWidthValue(const struct ZigClangFieldDecl *self, const struct ZigClangASTContext* ctx) {
+    auto casted = reinterpret_cast<const clang::FieldDecl *>(self);
+    auto casted_ctx = reinterpret_cast<const clang::ASTContext *>(ctx);
+    return casted->getBitWidthValue(*casted_ctx);
+}
+
 ZigClangSourceLocation ZigClangFieldDecl_getLocation(const struct ZigClangFieldDecl *self) {
     auto casted = reinterpret_cast<const clang::FieldDecl *>(self);
     return bitcast(casted->getLocation());
