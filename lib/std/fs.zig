@@ -815,6 +815,11 @@ pub const Dir = struct {
         try os.mkdirat(self.fd, sub_path, default_new_dir_mode);
     }
 
+    pub fn makeDirAndOpen(self: Dir, sub_path: []const u8) !Dir {
+        const fd = try os.mkdirAndOpenAt(self.fd, sub_path, default_new_dir_mode);
+        return Dir{ .fd = fd };
+    }
+
     pub fn makeDirC(self: Dir, sub_path: [*:0]const u8) !void {
         try os.mkdiratC(self.fd, sub_path, default_new_dir_mode);
     }

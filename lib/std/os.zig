@@ -695,14 +695,23 @@ pub fn openC(file_path: [*:0]const u8, flags: u32, perm: usize) OpenError!fd_t {
 /// `file_path` is relative to the open directory handle `dir_fd`.
 /// See also `openatC`.
 pub fn openat(dir_fd: fd_t, file_path: []const u8, flags: u32, mode: usize) OpenError!fd_t {
-    const file_path_c = try toPosixPath(file_path);
-    return openatC(dir_fd, &file_path_c, flags, mode);
+    if (builtin.os == .windows) {
+        const sub_dir_path_w = try windows.sliceToPrefixedFileW(sub_dir_path);
+        return openatW(dir_fd, mem.toSliceConst(u16, &sub_dir_path_w), mode);
+    } else {
+        const file_path_c = try toPosixPath(file_path);
+        return openatC(dir_fd, &file_path_c, flags, mode);
+    }
 }
 
 /// Open and possibly create a file. Keeps trying if it gets interrupted.
 /// `file_path` is relative to the open directory handle `dir_fd`.
 /// See also `openat`.
 pub fn openatC(dir_fd: fd_t, file_path: [*:0]const u8, flags: u32, mode: usize) OpenError!fd_t {
+    if (builtin.os == .windows) {
+        return openat(dir_fd, mem.toSliceConst(file_path), flags, mode);
+    }
+
     while (true) {
         const rc = system.openat(dir_fd, file_path, flags, mode);
         switch (errno(rc)) {
@@ -729,6 +738,60 @@ pub fn openatC(dir_fd: fd_t, file_path: [*:0]const u8, flags: u32, mode: usize) 
             EBUSY => return error.DeviceBusy,
             else => |err| return unexpectedErrno(err),
         }
+    }
+}
+
+pub fn openatW(dir_fd: fd_t, file_path: []const u16, flags: u32, mode: usize) OpenError!fd_t {
+    if (builtin.os == .windows) {
+        const path_len_bytes = math.cast(u16, mem.toSliceConst(u16, file_path).len * 2) catch |err| switch (err) {
+            error.Overflow => return error.NameTooLong,
+        };
+        if (flags & O_DIRECTORY and file_path[0] == '.' and file_path[1] == 0) {
+            return error.IsDir;
+        }
+        if (flags & O_DIRECTORY and file_path[0] == '.' and file_path[1] == '.' and file_path[2] == 0) {
+            return error.IsDir;
+        }
+        var handle: windows.HANDLE = undefined;
+        var io: windows.IO_STATUS_BLOCK = undefined;
+        const rc = windows.ntdll.NtCreateFile(
+            &handle,
+            access_mask,
+            &windows.OBJECT_ATTRIBUTES{
+                .Length = @sizeOf(windows.OBJECT_ATTRIBUTES),
+                .RootDirectory = if (path.isAbsoluteW(file_path)) null else self.fd,
+                .Attributes = 0, // Note we do not use OBJ_CASE_INSENSITIVE here.
+                .ObjectName = &windows.UNICODE_STRING{
+                    .Length = path_len_bytes,
+                    .MaximumLength = path_len_bytes,
+                    .Buffer = @intToPtr([*]u16, @ptrToInt(file_path)),
+                },
+                .SecurityDescriptor = null,
+                .SecurityQualityOfService = null,
+            },
+            &io,
+            null,
+            windows.FILE_ATTRIBUTE_NORMAL,
+            windows.FILE_SHARE_WRITE | windows.FILE_SHARE_READ | windows.FILE_SHARE_DELETE,
+            creation,
+            windows.FILE_NON_DIRECTORY_FILE | windows.FILE_SYNCHRONOUS_IO_NONALERT,
+            null,
+            0,
+        );
+        switch (rc) {
+            windows.STATUS.SUCCESS => {},
+            windows.STATUS.OBJECT_NAME_INVALID => unreachable,
+            windows.STATUS.OBJECT_NAME_NOT_FOUND => return error.FileNotFound,
+            windows.STATUS.OBJECT_PATH_NOT_FOUND => return error.FileNotFound,
+            windows.STATUS.INVALID_PARAMETER => unreachable,
+            windows.STATUS.SHARING_VIOLATION => return error.SharingViolation,
+            windows.STATUS.ACCESS_DENIED => return error.AccessDenied,
+            windows.STATUS.PIPE_BUSY => return error.PipeBusy,
+            windows.STATUS.OBJECT_PATH_SYNTAX_BAD => unreachable,
+            windows.STATUS.OBJECT_NAME_COLLISION => return error.PathAlreadyExists,
+            else => return w.unexpectedStatus(rc),
+        }
+        return handle;
     }
 }
 
@@ -1268,36 +1331,33 @@ pub const MakeDirError = error{
     FileNotFound,
     SystemResources,
     NoSpaceLeft,
-    NotDir,
     ReadOnlyFileSystem,
     InvalidUtf8,
     BadPathName,
 } || UnexpectedError;
 
-pub fn mkdirat(dirfd: fd_t, sub_dir_path: []const u8, mode: u32) MakeDirError!void {
+pub fn mkdirAndOpenAtW(dirfd: fd_t, sub_dir_path_w: []const u16, flags: u32, mode: u32) MakeDirError!fd_t {
     if (builtin.os == .windows) {
-        const sub_dir_path_w = try windows.sliceToPrefixedFileW(sub_dir_path);
-        const path_len_bytes = @intCast(u16, mem.toSliceConst(u16, &sub_dir_path_w).len * 2);
-        var nt_name = windows.UNICODE_STRING{
-            .Length = path_len_bytes,
-            .MaximumLength = path_len_bytes,
-            // The Windows API marks this mutable, but it will not mutate here.
-            .Buffer = @intToPtr([*]u16, @ptrToInt(&sub_dir_path_w)),
-        };
-        var attr = windows.OBJECT_ATTRIBUTES{
-            .Length = @sizeOf(windows.OBJECT_ATTRIBUTES),
-            .RootDirectory = dirfd,
-            .Attributes = 0,
-            .ObjectName = &nt_name,
-            .SecurityDescriptor = null,
-            .SecurityQualityOfService = null,
-        };
+        const path_len_bytes = @intCast(u16, sub_dir_path_w.len * 2);
         var io: windows.IO_STATUS_BLOCK = undefined;
-        var tmp_handle: windows.HANDLE = undefined;
-        var rc = windows.ntdll.NtCreateFile(
-            &tmp_handle,
+        var fd: windows.HANDLE = undefined;
+        const rc = windows.ntdll.NtCreateFile(
+            &fd,
             windows.FILE_LIST_DIRECTORY | windows.FILE_TRAVERSE,
-            &attr,
+            &windows.OBJECT_ATTRIBUTES{
+                .Length = @sizeOf(windows.OBJECT_ATTRIBUTES),
+                .RootDirectory = dirfd,
+                .Attributes = 0,
+                .ObjectName = &windows.UNICODE_STRING{
+                    .Length = path_len_bytes,
+                    .MaximumLength = path_len_bytes,
+                    // The Windows API marks this mutable, but it will not mutate here.
+                    .Buffer = @intToPtr([*]u16, @ptrToInt(sub_dir_path_w.ptr)),
+                },
+                // TODO: use `mode` to inform `SecurityDescriptor`
+                .SecurityDescriptor = null,
+                .SecurityQualityOfService = null,
+            },
             &io,
             null,
             0,
@@ -1307,16 +1367,52 @@ pub fn mkdirat(dirfd: fd_t, sub_dir_path: []const u8, mode: u32) MakeDirError!vo
             null,
             0,
         );
-        assert(windows.ntdll.NtClose(tmp_handle) == windows.STATUS.SUCCESS);
+        std.debug.warn("STATUS={x}\n", .{rc});
         switch (rc) {
-            windows.STATUS.SUCCESS => return,
-            windows.STATUS.OBJECT_NAME_INVALID => unreachable,
+            windows.STATUS.SUCCESS => {},
             windows.STATUS.INVALID_PARAMETER => unreachable,
+            windows.STATUS.OBJECT_NAME_INVALID => unreachable,
+            windows.STATUS.ACCESS_DENIED => return error.AccessDenied,
+            windows.STATUS.OBJECT_NAME_COLLISION => return error.PathAlreadyExists,
+            windows.STATUS.OBJECT_PATH_NOT_FOUND => return error.FileNotFound,
             else => return windows.unexpectedStatus(rc),
         }
+        return fd;
+    }
+}
+
+pub fn mkdirAndOpenAt(dirfd: fd_t, sub_dir_path: []const u8, flags: u32, mode: u32) MakeDirError!fd_t {
+    if (builtin.os == .windows) {
+        const sub_dir_path_w = try windows.sliceToPrefixedFileW(sub_dir_path);
+        return mkdirAndOpenAtW(dirfd, mem.toSliceConst(u16, &sub_dir_path_w), mode);
     } else {
         const sub_dir_path_c = try toPosixPath(sub_dir_path);
-        return mkdiratC(dir_fd, &sub_dir_path_c, mode);
+        return mkdirAndOpenAtC(dirfd, &sub_dir_path_c, flags, mode);
+    }
+}
+
+pub fn mkdirAndOpenAtC(dirfd: fd_t, sub_dir_path: [*:0]const u8, flags: u32, mode: u32) MakeDirError!fd_t {
+    if (builtin.os == .windows) {
+        return mkdirAndOpenAt(dirfd, mem.toSliceConst(sub_dir_path), mode);
+    } else {
+        try mkdiratC(dirfd, sub_dir_path, mode);
+        return openatC(dirfd, sub_dir_path, flags | os.O_DIRECTORY, mode) catch |err| switch (err) {
+            error.FileTooBig => unreachable, // can't happen for directories
+            error.IsDir => unreachable, // we're providing O_DIRECTORY
+            error.NoSpaceLeft => unreachable, // not providing O_CREAT
+            error.PathAlreadyExists => unreachable, // not providing O_CREAT
+            else => |e| return e,
+        };
+    }
+}
+
+pub fn mkdirat(dirfd: fd_t, sub_dir_path: []const u8, mode: u32) MakeDirError!void {
+    if (builtin.os == .windows) {
+        const fd = try mkdirAndOpenAt(sub_dir_path, mode);
+        assert(windows.ntdll.NtClose(fd) == windows.STATUS.SUCCESS);
+    } else {
+        const sub_dir_path_c = try toPosixPath(sub_dir_path);
+        return mkdiratC(dirfd, &sub_dir_path_c, mode);
     }
 }
 
@@ -1338,7 +1434,7 @@ pub fn mkdiratC(dirfd: fd_t, sub_dir_path: [*:0]const u8, mode: u32) MakeDirErro
             ENOENT => return error.FileNotFound,
             ENOMEM => return error.SystemResources,
             ENOSPC => return error.NoSpaceLeft,
-            ENOTDIR => return error.NotDir,
+            ENOTDIR => return error.PathAlreadyExists, // for parity with windows
             EROFS => return error.ReadOnlyFileSystem,
             else => |err| return unexpectedErrno(err),
         }
@@ -1376,7 +1472,7 @@ pub fn mkdirC(dir_path: [*:0]const u8, mode: u32) MakeDirError!void {
         ENOENT => return error.FileNotFound,
         ENOMEM => return error.SystemResources,
         ENOSPC => return error.NoSpaceLeft,
-        ENOTDIR => return error.NotDir,
+        ENOTDIR => return error.PathAlreadyExists, // for parity with windows
         EROFS => return error.ReadOnlyFileSystem,
         else => |err| return unexpectedErrno(err),
     }
