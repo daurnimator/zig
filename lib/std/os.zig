@@ -1274,38 +1274,74 @@ pub const MakeDirError = error{
     BadPathName,
 } || UnexpectedError;
 
-pub fn mkdirat(dir_fd: fd_t, sub_dir_path: []const u8, mode: u32) MakeDirError!void {
+pub fn mkdirat(dirfd: fd_t, sub_dir_path: []const u8, mode: u32) MakeDirError!void {
     if (builtin.os == .windows) {
         const sub_dir_path_w = try windows.sliceToPrefixedFileW(sub_dir_path);
-        @compileError("TODO implement mkdirat for Windows");
+        const path_len_bytes = @intCast(u16, mem.toSliceConst(u16, &sub_dir_path_w).len * 2);
+        var nt_name = windows.UNICODE_STRING{
+            .Length = path_len_bytes,
+            .MaximumLength = path_len_bytes,
+            // The Windows API marks this mutable, but it will not mutate here.
+            .Buffer = @intToPtr([*]u16, @ptrToInt(&sub_dir_path_w)),
+        };
+        var attr = windows.OBJECT_ATTRIBUTES{
+            .Length = @sizeOf(windows.OBJECT_ATTRIBUTES),
+            .RootDirectory = dirfd,
+            .Attributes = 0,
+            .ObjectName = &nt_name,
+            .SecurityDescriptor = null,
+            .SecurityQualityOfService = null,
+        };
+        var io: windows.IO_STATUS_BLOCK = undefined;
+        var tmp_handle: windows.HANDLE = undefined;
+        var rc = windows.ntdll.NtCreateFile(
+            &tmp_handle,
+            windows.FILE_LIST_DIRECTORY | windows.FILE_TRAVERSE,
+            &attr,
+            &io,
+            null,
+            0,
+            windows.FILE_SHARE_READ | windows.FILE_SHARE_WRITE | windows.FILE_SHARE_DELETE,
+            windows.FILE_CREATE,
+            windows.FILE_DIRECTORY_FILE,
+            null,
+            0,
+        );
+        assert(windows.ntdll.NtClose(tmp_handle) == windows.STATUS.SUCCESS);
+        switch (rc) {
+            windows.STATUS.SUCCESS => return,
+            windows.STATUS.OBJECT_NAME_INVALID => unreachable,
+            windows.STATUS.INVALID_PARAMETER => unreachable,
+            else => return windows.unexpectedStatus(rc),
+        }
     } else {
         const sub_dir_path_c = try toPosixPath(sub_dir_path);
         return mkdiratC(dir_fd, &sub_dir_path_c, mode);
     }
 }
 
-pub fn mkdiratC(dir_fd: fd_t, sub_dir_path: [*:0]const u8, mode: u32) MakeDirError!void {
+pub fn mkdiratC(dirfd: fd_t, sub_dir_path: [*:0]const u8, mode: u32) MakeDirError!void {
     if (builtin.os == .windows) {
-        const sub_dir_path_w = try windows.cStrToPrefixedFileW(sub_dir_path);
-        @compileError("TODO implement mkdiratC for Windows");
-    }
-    switch (errno(system.mkdirat(dir_fd, sub_dir_path, mode))) {
-        0 => return,
-        EACCES => return error.AccessDenied,
-        EBADF => unreachable,
-        EPERM => return error.AccessDenied,
-        EDQUOT => return error.DiskQuota,
-        EEXIST => return error.PathAlreadyExists,
-        EFAULT => unreachable,
-        ELOOP => return error.SymLinkLoop,
-        EMLINK => return error.LinkQuotaExceeded,
-        ENAMETOOLONG => return error.NameTooLong,
-        ENOENT => return error.FileNotFound,
-        ENOMEM => return error.SystemResources,
-        ENOSPC => return error.NoSpaceLeft,
-        ENOTDIR => return error.NotDir,
-        EROFS => return error.ReadOnlyFileSystem,
-        else => |err| return unexpectedErrno(err),
+        return mkdirat(dirfd, mem.toSliceConst(sub_dir_path), mode);
+    } else {
+        switch (errno(system.mkdirat(dirfd, sub_dir_path, mode))) {
+            0 => return,
+            EACCES => return error.AccessDenied,
+            EBADF => unreachable,
+            EPERM => return error.AccessDenied,
+            EDQUOT => return error.DiskQuota,
+            EEXIST => return error.PathAlreadyExists,
+            EFAULT => unreachable,
+            ELOOP => return error.SymLinkLoop,
+            EMLINK => return error.LinkQuotaExceeded,
+            ENAMETOOLONG => return error.NameTooLong,
+            ENOENT => return error.FileNotFound,
+            ENOMEM => return error.SystemResources,
+            ENOSPC => return error.NoSpaceLeft,
+            ENOTDIR => return error.NotDir,
+            EROFS => return error.ReadOnlyFileSystem,
+            else => |err| return unexpectedErrno(err),
+        }
     }
 }
 
