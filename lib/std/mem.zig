@@ -365,6 +365,32 @@ pub fn eql(comptime T: type, a: []const T, b: []const T) bool {
     return true;
 }
 
+/// Compares two slices in constant time and returns whether they are equal.
+pub fn secureEqual(comptime T: type, a: []const T, b: []const T) bool {
+    if (a.len != b.len) return false;
+    if (a.ptr == b.ptr) return true;
+
+    var result = switch (@typeInfo(T)) {
+        .Int, .ComptimeInt => @as(T, 0),
+        .Float => |floatInfo| @as(@Type(builtin.TypeInfo{ .Int = .{ .is_signed = false, .bits = floatInfo.bits } }), 0),
+        .Bool => @as(u1, 0),
+        .Enum => |enumInfo| @as(enumInfo.tag_type, 0),
+        else => @compileError("secureEqual not implemented for " ++ @typeName(T)),
+    };
+    var i: usize = 0;
+    while (i < a.len) : (i += 1) {
+        result |= switch (@typeId(T)) {
+            .Int, .ComptimeInt => a[i] ^ b[i],
+            .Float => @bitCast(@TypeOf(result), a[i]) ^ @bitCast(@TypeOf(result), b[i]),
+            .Bool => @boolToInt(a[i] != b[i]),
+            .Enum => @enumToInt(a[i]) ^ @enumToInt(b[i]),
+            else => unreachable,
+        };
+    }
+
+    return result == 0;
+}
+
 pub fn len(comptime T: type, ptr: [*:0]const T) usize {
     var count: usize = 0;
     while (ptr[count] != 0) : (count += 1) {}
