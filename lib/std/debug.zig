@@ -623,9 +623,11 @@ fn populateModule(di: *DebugInfo, mod: *Module) !void {
         return error.InvalidDebugInfo;
 
     mod.symbols = try allocator.alloc(u8, mod.mod_info.SymByteSize - 4);
+    errdefer allocator.free(mod.symbols);
     try modi.stream.readNoEof(mod.symbols);
 
     mod.subsect_info = try allocator.alloc(u8, mod.mod_info.C13ByteSize);
+    errdefer allocator.free(mod.subsect_info);
     try modi.stream.readNoEof(mod.subsect_info);
 
     var sect_offset: usize = 0;
@@ -811,6 +813,7 @@ fn openSelfDebugInfoWindows(allocator: *mem.Allocator) !DebugInfo {
     const string_table_index = str_tab_index: {
         const name_bytes_len = try pdb_stream.stream.readIntLittle(u32);
         const name_bytes = try allocator.alloc(u8, name_bytes_len);
+        defer allocator.free(name_bytes);
         try pdb_stream.stream.readNoEof(name_bytes);
 
         const HashTableHeader = packed struct {
@@ -829,15 +832,12 @@ fn openSelfDebugInfoWindows(allocator: *mem.Allocator) !DebugInfo {
             return error.InvalidDebugInfo;
 
         const present = try readSparseBitVector(&pdb_stream.stream, allocator);
+        defer allocator.free(present);
         if (present.len != hash_tbl_hdr.Size)
             return error.InvalidDebugInfo;
         const deleted = try readSparseBitVector(&pdb_stream.stream, allocator);
+        defer allocator.free(deleted);
 
-        const Bucket = struct {
-            first: u32,
-            second: u32,
-        };
-        const bucket_list = try allocator.alloc(Bucket, present.len);
         for (present) |_| {
             const name_offset = try pdb_stream.stream.readIntLittle(u32);
             const name_index = try pdb_stream.stream.readIntLittle(u32);
@@ -864,64 +864,76 @@ fn openSelfDebugInfoWindows(allocator: *mem.Allocator) !DebugInfo {
     const mod_info_size = dbi_stream_header.ModInfoSize;
     const section_contrib_size = dbi_stream_header.SectionContributionSize;
 
-    var modules = ArrayList(Module).init(allocator);
-
-    // Module Info Substream
-    var mod_info_offset: usize = 0;
-    while (mod_info_offset != mod_info_size) {
-        const mod_info = try dbi.stream.readStruct(pdb.ModInfo);
-        var this_record_len: usize = @sizeOf(pdb.ModInfo);
-
-        const module_name = try dbi.readNullTermString(allocator);
-        this_record_len += module_name.len + 1;
-
-        const obj_file_name = try dbi.readNullTermString(allocator);
-        this_record_len += obj_file_name.len + 1;
-
-        if (this_record_len % 4 != 0) {
-            const round_to_next_4 = (this_record_len | 0x3) + 1;
-            const march_forward_bytes = round_to_next_4 - this_record_len;
-            try dbi.seekBy(@intCast(isize, march_forward_bytes));
-            this_record_len += march_forward_bytes;
+    {
+        var modules = ArrayList(Module).init(allocator);
+        errdefer {
+            for (modules.toSliceConst()) |module| {
+                allocator.free(module.module_name);
+                allocator.free(module.obj_file_name);
+            }
+            modules.deinit();
         }
 
-        try modules.append(Module{
-            .mod_info = mod_info,
-            .module_name = module_name,
-            .obj_file_name = obj_file_name,
+        // Module Info Substream
+        var mod_info_offset: usize = 0;
+        while (mod_info_offset != mod_info_size) {
+            const mod_info = try dbi.stream.readStruct(pdb.ModInfo);
+            var this_record_len: usize = @sizeOf(pdb.ModInfo);
 
-            .populated = false,
-            .symbols = undefined,
-            .subsect_info = undefined,
-            .checksum_offset = null,
-        });
+            const module_name = try dbi.readNullTermString(allocator);
+            this_record_len += module_name.len + 1;
 
-        mod_info_offset += this_record_len;
-        if (mod_info_offset > mod_info_size)
-            return error.InvalidDebugInfo;
+            const obj_file_name = try dbi.readNullTermString(allocator);
+            this_record_len += obj_file_name.len + 1;
+
+            if (this_record_len % 4 != 0) {
+                const round_to_next_4 = (this_record_len | 0x3) + 1;
+                const march_forward_bytes = round_to_next_4 - this_record_len;
+                try dbi.seekBy(@intCast(isize, march_forward_bytes));
+                this_record_len += march_forward_bytes;
+            }
+
+            try modules.append(Module{
+                .mod_info = mod_info,
+                .module_name = module_name,
+                .obj_file_name = obj_file_name,
+
+                .populated = false,
+                .symbols = undefined,
+                .subsect_info = undefined,
+                .checksum_offset = null,
+            });
+
+            mod_info_offset += this_record_len;
+            if (mod_info_offset > mod_info_size)
+                return error.InvalidDebugInfo;
+        }
+
+        di.modules = modules.toOwnedSlice();
     }
 
-    di.modules = modules.toOwnedSlice();
+    {
+        // Section Contribution Substream
+        var sect_contribs = ArrayList(pdb.SectionContribEntry).init(allocator);
+        errdefer sect_contribs.deinit();
+        var sect_cont_offset: usize = 0;
+        if (section_contrib_size != 0) {
+            const ver = @intToEnum(pdb.SectionContrSubstreamVersion, try dbi.stream.readIntLittle(u32));
+            if (ver != pdb.SectionContrSubstreamVersion.Ver60)
+                return error.InvalidDebugInfo;
+            sect_cont_offset += @sizeOf(u32);
+        }
+        while (sect_cont_offset != section_contrib_size) {
+            const entry = try sect_contribs.addOne();
+            entry.* = try dbi.stream.readStruct(pdb.SectionContribEntry);
+            sect_cont_offset += @sizeOf(pdb.SectionContribEntry);
 
-    // Section Contribution Substream
-    var sect_contribs = ArrayList(pdb.SectionContribEntry).init(allocator);
-    var sect_cont_offset: usize = 0;
-    if (section_contrib_size != 0) {
-        const ver = @intToEnum(pdb.SectionContrSubstreamVersion, try dbi.stream.readIntLittle(u32));
-        if (ver != pdb.SectionContrSubstreamVersion.Ver60)
-            return error.InvalidDebugInfo;
-        sect_cont_offset += @sizeOf(u32);
+            if (sect_cont_offset > section_contrib_size)
+                return error.InvalidDebugInfo;
+        }
+
+        di.sect_contribs = sect_contribs.toOwnedSlice();
     }
-    while (sect_cont_offset != section_contrib_size) {
-        const entry = try sect_contribs.addOne();
-        entry.* = try dbi.stream.readStruct(pdb.SectionContribEntry);
-        sect_cont_offset += @sizeOf(pdb.SectionContribEntry);
-
-        if (sect_cont_offset > section_contrib_size)
-            return error.InvalidDebugInfo;
-    }
-
-    di.sect_contribs = sect_contribs.toOwnedSlice();
 
     return di;
 }
@@ -930,6 +942,7 @@ fn readSparseBitVector(stream: var, allocator: *mem.Allocator) ![]usize {
     const num_words = try stream.readIntLittle(u32);
     var word_i: usize = 0;
     var list = ArrayList(usize).init(allocator);
+    errdefer list.deinit();
     while (word_i != num_words) : (word_i += 1) {
         const word = try stream.readIntLittle(u32);
         var bit_i: u5 = 0;
@@ -1242,6 +1255,7 @@ pub const DwarfInfo = struct {
 
             while ((try s.seekable_stream.getPos()) < next_unit_pos) {
                 const die_obj = (try di.parseDie(&s.stream, abbrev_table, is_64)) orelse continue;
+                defer die_obj.deinit(di.allocator());
                 const after_die_offset = try s.seekable_stream.getPos();
 
                 switch (die_obj.tag_id) {
@@ -1249,7 +1263,7 @@ pub const DwarfInfo = struct {
                         const fn_name = x: {
                             var depth: i32 = 3;
                             var this_die_obj = die_obj;
-                            // Prenvent endless loops
+                            // Prevent endless loops
                             while (depth > 0) : (depth -= 1) {
                                 if (this_die_obj.getAttr(DW.AT_name)) |_| {
                                     const name = try this_die_obj.getAttrString(di, DW.AT_name);
@@ -1259,12 +1273,14 @@ pub const DwarfInfo = struct {
                                     const ref_offset = try this_die_obj.getAttrRef(DW.AT_abstract_origin);
                                     if (ref_offset > next_offset) return error.InvalidDebugInfo;
                                     try s.seekable_stream.seekTo(this_unit_offset + ref_offset);
+                                    if (depth < 3) this_die_obj.deinit(di.allocator());
                                     this_die_obj = (try di.parseDie(&s.stream, abbrev_table, is_64)) orelse return error.InvalidDebugInfo;
                                 } else if (this_die_obj.getAttr(DW.AT_specification)) |ref| {
                                     // Follow the DIE it points to and repeat
                                     const ref_offset = try this_die_obj.getAttrRef(DW.AT_specification);
                                     if (ref_offset > next_offset) return error.InvalidDebugInfo;
                                     try s.seekable_stream.seekTo(this_unit_offset + ref_offset);
+                                    if (depth < 3) this_die_obj.deinit(di.allocator());
                                     this_die_obj = (try di.parseDie(&s.stream, abbrev_table, is_64)) orelse return error.InvalidDebugInfo;
                                 } else {
                                     break :x null;
@@ -1342,7 +1358,9 @@ pub const DwarfInfo = struct {
             try s.seekable_stream.seekTo(compile_unit_pos);
 
             const compile_unit_die = try di.allocator().create(Die);
+            errdefer di.allocator().destroy(compile_unit_die);
             compile_unit_die.* = (try di.parseDie(&s.stream, abbrev_table, is_64)) orelse return error.InvalidDebugInfo;
+            errdefer compile_unit_die.*.deinit(di.allocator());
 
             if (compile_unit_die.tag_id != DW.TAG_compile_unit) return error.InvalidDebugInfo;
 
@@ -1445,7 +1463,12 @@ pub const DwarfInfo = struct {
 
         try s.seekable_stream.seekTo(offset);
         var result = AbbrevTable.init(di.allocator());
-        errdefer result.deinit();
+        errdefer {
+            for (result.toSliceConst()) |entry| {
+                entry.attrs.deinit();
+            }
+            result.deinit();
+        }
         while (true) {
             const abbrev_code = try leb.readULEB128(u64, &s.stream);
             if (abbrev_code == 0) return result;
@@ -1479,6 +1502,7 @@ pub const DwarfInfo = struct {
             .has_children = table_entry.has_children,
             .attrs = ArrayList(Die.Attr).init(di.allocator()),
         };
+        errdefer result.deinit(di.allocator());
         try result.attrs.resize(table_entry.attrs.len);
         for (table_entry.attrs.toSliceConst()) |attr, i| {
             result.attrs.items[i] = Die.Attr{
@@ -1741,6 +1765,13 @@ const FormValue = union(enum) {
     RefAddr: u64,
     String: []u8,
     StrPtr: u64,
+
+    pub fn deinit(self: @This(), allocator: *mem.Allocator) void {
+        switch (self) {
+            .Block, .ExprLoc, .String => |slice| allocator.free(slice),
+            else => {},
+        }
+    }
 };
 
 const Constant = struct {
@@ -1762,6 +1793,12 @@ const Die = struct {
         id: u64,
         value: FormValue,
     };
+
+    pub fn deinit(self: Die, allocator: *mem.Allocator) void {
+        for (self.attrs.toSliceConst()) |attr| {
+            attr.value.deinit(allocator);
+        }
+    }
 
     fn getAttr(self: *const Die, id: u64) ?*const FormValue {
         for (self.attrs.toSliceConst()) |*attr| {
