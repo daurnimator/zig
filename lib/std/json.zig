@@ -1290,37 +1290,68 @@ pub const Value = union(enum) {
         defer held.release();
 
         const stderr = std.debug.getStderrStream();
-        self.dumpStream(stderr, 1024) catch return;
+        self.dumpStream(null, stderr) catch return;
     }
 
-    pub fn dumpIndent(self: Value, comptime indent: usize) void {
-        if (indent == 0) {
-            self.dump();
-        } else {
-            var held = std.debug.getStderrMutex().acquire();
-            defer held.release();
-
-            const stderr = std.debug.getStderrStream();
-            self.dumpStreamIndent(indent, stderr, 1024) catch return;
-        }
-    }
-
-    pub fn dumpStream(self: @This(), stream: var, comptime max_depth: usize) !void {
-        var w = std.json.WriteStream(@TypeOf(stream).Child, max_depth).init(stream);
-        w.newline = "";
-        w.one_indent = "";
-        w.space = "";
-        try w.emitJson(self);
-    }
-
-    pub fn dumpStreamIndent(self: @This(), comptime indent: usize, stream: var, comptime max_depth: usize) !void {
-        var one_indent = " " ** indent;
-
-        var w = std.json.WriteStream(@TypeOf(stream).Child, max_depth).init(stream);
-        w.one_indent = one_indent;
-        try w.emitJson(self);
+    pub fn dumpStream(self: Value, comptime whitespace: ?std.json.StringifyOptions.Whitespace, stream: var) !void {
+        const OutStream = @TypeOf(stream).Child;
+        try std.json.stringify(self, std.json.StringifyOptions{ .whitespace = whitespace }, stream, OutStream.Error, OutStream.write);
     }
 };
+
+test "Value.dumpStream" {
+    {
+        var buffer: [10]u8 = undefined;
+        var ss = std.io.SliceOutStream.init(&buffer);
+        try @as(Value, .Null).dumpStream(null, &ss.stream);
+        testing.expectEqualSlices(u8, ss.getWritten(), "null");
+    }
+    {
+        var buffer: [10]u8 = undefined;
+        var ss = std.io.SliceOutStream.init(&buffer);
+        try (Value{ .Bool = true }).dumpStream(null, &ss.stream);
+        testing.expectEqualSlices(u8, ss.getWritten(), "true");
+    }
+    {
+        var buffer: [10]u8 = undefined;
+        var ss = std.io.SliceOutStream.init(&buffer);
+        try (Value{ .Integer = 42 }).dumpStream(null, &ss.stream);
+        testing.expectEqualSlices(u8, ss.getWritten(), "42");
+    }
+    {
+        var buffer: [10]u8 = undefined;
+        var ss = std.io.SliceOutStream.init(&buffer);
+        try (Value{ .Float = 42 }).dumpStream(null, &ss.stream);
+        testing.expectEqualSlices(u8, ss.getWritten(), "4.2e+01");
+    }
+    {
+        var buffer: [10]u8 = undefined;
+        var ss = std.io.SliceOutStream.init(&buffer);
+        try (Value{ .String = "weeee" }).dumpStream(null, &ss.stream);
+        testing.expectEqualSlices(u8, ss.getWritten(), "\"weeee\"");
+    }
+    {
+        var buffer: [10]u8 = undefined;
+        var ss = std.io.SliceOutStream.init(&buffer);
+        try (Value{
+            .Array = Array.fromOwnedSlice(undefined, &[_]Value{
+                .{ .Integer = 1 },
+                .{ .Integer = 2 },
+                .{ .Integer = 3 },
+            }),
+        }).dumpStream(null, &ss.stream);
+        testing.expectEqualSlices(u8, ss.getWritten(), "[1,2,3]");
+    }
+    {
+        var buffer: [10]u8 = undefined;
+        var ss = std.io.SliceOutStream.init(&buffer);
+        var obj = ObjectMap.init(testing.allocator);
+        defer obj.deinit();
+        try obj.putNoClobber("a", .{ .String = "b" });
+        try (Value{ .Object = obj }).dumpStream(null, &ss.stream);
+        testing.expectEqualSlices(u8, ss.getWritten(), "{\"a\":\"b\"}");
+    }
+}
 
 pub const ParseOptions = struct {
     allocator: ?*Allocator = null,
