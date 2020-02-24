@@ -1232,6 +1232,59 @@ pub const Value = union(enum) {
     Array: Array,
     Object: ObjectMap,
 
+    pub fn jsonStringify(
+        value: @This(),
+        options: StringifyOptions,
+        context: var,
+        comptime Errors: type,
+        comptime output: fn (@TypeOf(context), []const u8) Errors!void,
+    ) Errors!void {
+        switch (value) {
+            .Null => try output(context, "null"),
+            .Bool => |inner| try stringify(inner, options, context, Errors, output),
+            .Integer => |inner| try stringify(inner, options, context, Errors, output),
+            .Float => |inner| try stringify(inner, options, context, Errors, output),
+            .String => |inner| try stringify(inner, options, context, Errors, output),
+            .Array => |inner| try stringify(inner.toSliceConst(), options, context, Errors, output),
+            .Object => |inner| {
+                try output(context, "{");
+                var field_output = false;
+                var child_options = options;
+                if (child_options.whitespace) |*child_whitespace| {
+                    child_whitespace.indent_level += 1;
+                }
+                var it = inner.iterator();
+                while (it.next()) |entry| {
+                    if (!field_output) {
+                        field_output = true;
+                    } else {
+                        try output(context, ",");
+                    }
+                    if (child_options.whitespace) |child_whitespace| {
+                        try output(context, "\n");
+                        try child_whitespace.outputIndent(context, Errors, output);
+                    }
+
+                    try stringify(entry.key, options, context, Errors, output);
+                    try output(context, ":");
+                    if (child_options.whitespace) |child_whitespace| {
+                        if (child_whitespace.separator) {
+                            try output(context, " ");
+                        }
+                    }
+                    try stringify(entry.value, child_options, context, Errors, output);
+                }
+                if (field_output) {
+                    if (options.whitespace) |whitespace| {
+                        try output(context, "\n");
+                        try whitespace.outputIndent(context, Errors, output);
+                    }
+                }
+                try output(context, "}");
+            },
+        }
+    }
+
     pub fn dump(self: Value) void {
         var held = std.debug.getStderrMutex().acquire();
         defer held.release();
