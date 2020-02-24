@@ -140,11 +140,7 @@ pub fn WriteStream(comptime OutStream: type, comptime max_depth: usize) type {
 
         pub fn emitBool(self: *Self, value: bool) !void {
             assert(self.state[self.state_index] == State.Value);
-            if (value) {
-                try self.stream.write("true");
-            } else {
-                try self.stream.write("false");
-            }
+            try std.json.stringify(value, std.json.StringifyOptions{}, self.stream, OutStream.Error, OutStream.write);
             self.popState();
         }
 
@@ -185,20 +181,8 @@ pub fn WriteStream(comptime OutStream: type, comptime max_depth: usize) type {
         }
 
         fn writeEscapedString(self: *Self, string: []const u8) !void {
-            try self.stream.writeByte('"');
-            for (string) |s| {
-                switch (s) {
-                    '"' => try self.stream.write("\\\""),
-                    '\t' => try self.stream.write("\\t"),
-                    '\r' => try self.stream.write("\\r"),
-                    '\n' => try self.stream.write("\\n"),
-                    8 => try self.stream.write("\\b"),
-                    12 => try self.stream.write("\\f"),
-                    '\\' => try self.stream.write("\\\\"),
-                    else => try self.stream.writeByte(s),
-                }
-            }
-            try self.stream.writeByte('"');
+            assert(std.unicode.utf8ValidateSlice(string));
+            try std.json.stringify(string, std.json.StringifyOptions{}, self.stream, OutStream.Error, OutStream.write);
         }
 
         /// Writes the complete json into the output stream
