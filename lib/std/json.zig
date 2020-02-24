@@ -2243,7 +2243,50 @@ test "string copy option" {
 }
 
 pub const StringifyOptions = struct {
-    // TODO: indentation options?
+    pub const Whitespace = struct {
+        /// How many indentation levels deep are we?
+        indent_level: usize = 0,
+
+        pub const Indentation = union(enum) {
+            Space: u8,
+            Tab: void,
+        };
+
+        /// What character(s) should be used for indentation?
+        indent: Indentation = Indentation{ .Space = 4 },
+
+        fn outputIndent(
+            whitespace: @This(),
+            context: var,
+            comptime Errors: type,
+            comptime output: fn (@TypeOf(context), []const u8) Errors!void,
+        ) Errors!void {
+            var char: u8 = undefined;
+            var n_chars: usize = undefined;
+            switch (whitespace.indent) {
+                .Space => |n_spaces| {
+                    char = ' ';
+                    n_chars = n_spaces;
+                },
+                .Tab => {
+                    char = '\t';
+                    n_chars = 1;
+                },
+            }
+            n_chars *= whitespace.indent_level;
+            var indent_chars: usize = 0;
+            while (indent_chars < n_chars) : (indent_chars += 1) {
+                try output(context, &[1]u8{char});
+            }
+        }
+
+        /// After a colon, should whitespace be inserted?
+        separator: bool = true,
+    };
+
+    /// Controls the whitespace emitted
+    whitespace: ?Whitespace = null,
+
     // TODO: make escaping '/' in strings optional?
     // TODO: allow picking if []u8 is string or array?
 };
@@ -2303,6 +2346,10 @@ pub fn stringify(
 
             try output(context, "{");
             comptime var field_output = false;
+            var child_options = options;
+            if (child_options.whitespace) |*child_whitespace| {
+                child_whitespace.indent_level += 1;
+            }
             inline for (S.fields) |Field, field_i| {
                 // don't include void fields
                 if (Field.field_type == void) continue;
@@ -2312,10 +2359,25 @@ pub fn stringify(
                 } else {
                     try output(context, ",");
                 }
+                if (child_options.whitespace) |child_whitespace| {
+                    try output(context, "\n");
+                    try child_whitespace.outputIndent(context, Errors, output);
+                }
 
                 try stringify(Field.name, options, context, Errors, output);
                 try output(context, ":");
-                try stringify(@field(value, Field.name), options, context, Errors, output);
+                if (child_options.whitespace) |child_whitespace| {
+                    if (child_whitespace.separator) {
+                        try output(context, " ");
+                    }
+                }
+                try stringify(@field(value, Field.name), child_options, context, Errors, output);
+            }
+            if (field_output) {
+                if (options.whitespace) |whitespace| {
+                    try output(context, "\n");
+                    try whitespace.outputIndent(context, Errors, output);
+                }
             }
             try output(context, "}");
             return;
@@ -2371,11 +2433,25 @@ pub fn stringify(
                 }
 
                 try output(context, "[");
+                var child_options = options;
+                if (child_options.whitespace) |*whitespace| {
+                    whitespace.indent_level += 1;
+                }
                 for (value) |x, i| {
                     if (i != 0) {
                         try output(context, ",");
                     }
-                    try stringify(x, options, context, Errors, output);
+                    if (child_options.whitespace) |child_whitespace| {
+                        try output(context, "\n");
+                        try child_whitespace.outputIndent(context, Errors, output);
+                    }
+                    try stringify(x, child_options, context, Errors, output);
+                }
+                if (value.len != 0) {
+                    if (options.whitespace) |whitespace| {
+                        try output(context, "\n");
+                        try whitespace.outputIndent(context, Errors, output);
+                    }
                 }
                 try output(context, "]");
                 return;
@@ -2470,6 +2546,46 @@ test "stringify struct" {
     try teststringify("{\"foo\":42}", struct {
         foo: u32,
     }{ .foo = 42 }, StringifyOptions{});
+}
+
+test "stringify struct with indentation" {
+    try teststringify(
+        \\{
+        \\    "foo": 42,
+        \\    "bar": [
+        \\        1,
+        \\        2,
+        \\        3
+        \\    ]
+        \\}
+    ,
+        struct {
+                foo: u32,
+                bar: [3]u32,
+            }{
+            .foo = 42,
+            .bar = .{ 1, 2, 3 },
+        },
+        StringifyOptions{
+            .whitespace = .{},
+        },
+    );
+    try teststringify(
+        "{\n\t\"foo\":42,\n\t\"bar\":[\n\t\t1,\n\t\t2,\n\t\t3\n\t]\n}",
+        struct {
+                foo: u32,
+                bar: [3]u32,
+            }{
+            .foo = 42,
+            .bar = .{ 1, 2, 3 },
+        },
+        StringifyOptions{
+            .whitespace = .{
+                .indent = .Tab,
+                .separator = false,
+            },
+        },
+    );
 }
 
 test "stringify struct with void field" {
