@@ -1373,6 +1373,12 @@ fn parseInternal(comptime T: type, token: Token, tokens: *TokenStream, options: 
                 else => error.UnexpectedToken,
             };
         },
+        .Null => {
+            switch (token) {
+                .Null => return null,
+                else => return error.UnexpectedToken,
+            }
+        },
         .Float, .ComptimeFloat => {
             const numberToken = switch (token) {
                 .Number => |n| n,
@@ -1601,7 +1607,7 @@ pub fn parse(comptime T: type, tokens: *TokenStream, options: ParseOptions) !T {
 /// Should be called with the same type and `ParseOptions` that were passed to `parse`
 pub fn parseFree(comptime T: type, value: T, options: ParseOptions) void {
     switch (@typeInfo(T)) {
-        .Bool, .Float, .ComptimeFloat, .Int, .ComptimeInt, .Enum => {},
+        .Bool, .Null, .Float, .ComptimeFloat, .Int, .ComptimeInt, .Enum => {},
         .Optional => {
             if (value) |v| {
                 return parseFree(@TypeOf(v), v, options);
@@ -1652,6 +1658,7 @@ pub fn parseFree(comptime T: type, value: T, options: ParseOptions) void {
 test "parse" {
     testing.expectEqual(false, try parse(bool, &TokenStream.init("false"), ParseOptions{}));
     testing.expectEqual(true, try parse(bool, &TokenStream.init("true"), ParseOptions{}));
+    testing.expectEqual(null, try parse(@TypeOf(null), &TokenStream.init("null"), ParseOptions{}));
     testing.expectEqual(@as(u1, 1), try parse(u1, &TokenStream.init("1"), ParseOptions{}));
     testing.expectError(error.Overflow, parse(u1, &TokenStream.init("50"), ParseOptions{}));
     testing.expectEqual(@as(u64, 42), try parse(u64, &TokenStream.init("42"), ParseOptions{}));
@@ -1775,6 +1782,7 @@ test "parse into struct with misc fields" {
         @"withąunicode😂": bool,
         language: []const u8,
         optional: ?bool,
+        a_null: @TypeOf(null),
         default_field: i32 = 42,
         static_array: [3]f64,
         dynamic_array: []f64,
@@ -1804,6 +1812,7 @@ test "parse into struct with misc fields" {
         \\  "with\u0105unicode\ud83d\ude02": false,
         \\  "language": "zig",
         \\  "optional": null,
+        \\  "a_null": null,
         \\  "static_array": [66.6, 420.420, 69.69],
         \\  "dynamic_array": [66.6, 420.420, 69.69],
         \\  "complex": {
@@ -1826,6 +1835,7 @@ test "parse into struct with misc fields" {
     testing.expectEqual(false, r.@"withąunicode😂");
     testing.expectEqualSlices(u8, "zig", r.language);
     testing.expectEqual(@as(?bool, null), r.optional);
+    testing.expectEqual(null, r.a_null);
     testing.expectEqual(@as(i32, 42), r.default_field);
     testing.expectEqual(@as(f64, 66.6), r.static_array[0]);
     testing.expectEqual(@as(f64, 420.420), r.static_array[1]);
