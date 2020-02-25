@@ -1240,7 +1240,7 @@ pub const Value = union(enum) {
         comptime output: fn (@TypeOf(context), []const u8) Errors!void,
     ) Errors!void {
         switch (value) {
-            .Null => try output(context, "null"),
+            .Null => try stringify(null, options, context, Errors, output),
             .Bool => |inner| try stringify(inner, options, context, Errors, output),
             .Integer => |inner| try stringify(inner, options, context, Errors, output),
             .Float => |inner| try stringify(inner, options, context, Errors, output),
@@ -2432,11 +2432,14 @@ pub fn stringify(
         .Bool => {
             return output(context, if (value) "true" else "false");
         },
+        .Null => {
+            return output(context, "null");
+        },
         .Optional => {
             if (value) |payload| {
                 return try stringify(payload, options, context, Errors, output);
             } else {
-                return output(context, "null");
+                return try stringify(null, options, context, Errors, output);
             }
         },
         .Enum => {
