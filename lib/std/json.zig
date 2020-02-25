@@ -2371,9 +2371,39 @@ pub const StringifyOptions = struct {
     /// Controls the whitespace emitted
     whitespace: ?Whitespace = null,
 
-    // TODO: make escaping '/' in strings optional?
+    /// Should '/' be escaped in strings?
+    escape_solidus: bool = false,
+
+    /// Should unicode characters be escaped in strings?
+    escape_unicode: bool = false,
+
     // TODO: allow picking if []u8 is string or array?
 };
+
+fn outputUnicodeEscape(
+    codepoint: u21,
+    context: var,
+    comptime Errors: type,
+    comptime output: fn (@TypeOf(context), []const u8) Errors!void,
+) Errors!void {
+    if (codepoint <= 0xFFFF) {
+        // If the character is in the Basic Multilingual Plane (U+0000 through U+FFFF),
+        // then it may be represented as a six-character sequence: a reverse solidus, followed
+        // by the lowercase letter u, followed by four hexadecimal digits that encode the character's code point.
+        try output(context, "\\u");
+        try std.fmt.formatIntValue(codepoint, "x", std.fmt.FormatOptions{ .width = 4, .fill = '0' }, context, Errors, output);
+    } else {
+        assert(codepoint <= 0x10FFFF);
+        // To escape an extended character that is not in the Basic Multilingual Plane,
+        // the character is represented as a 12-character sequence, encoding the UTF-16 surrogate pair.
+        const high = @intCast(u16, (codepoint - 0x10000) >> 10) + 0xD800;
+        const low = @intCast(u16, codepoint & 0x3FF) + 0xDC00;
+        try output(context, "\\u");
+        try std.fmt.formatIntValue(high, "x", std.fmt.FormatOptions{ .width = 4, .fill = '0' }, context, Errors, output);
+        try output(context, "\\u");
+        try std.fmt.formatIntValue(low, "x", std.fmt.FormatOptions{ .width = 4, .fill = '0' }, context, Errors, output);
+    }
+}
 
 pub fn stringify(
     value: var,
@@ -2480,10 +2510,13 @@ pub fn stringify(
                         switch (value[i]) {
                             // normal ascii characters
                             0x20...0x21, 0x23...0x2E, 0x30...0x5B, 0x5D...0x7F => try output(context, value[i .. i + 1]),
-                            // control characters with short escapes
+                            // only 2 characters that *must* be escaped
                             '\\' => try output(context, "\\\\"),
                             '\"' => try output(context, "\\\""),
-                            '/' => try output(context, "\\/"),
+                            // solidus is optional to escape
+                            '/' => try output(context, if (options.escape_solidus) "\\/" else value[i .. i + 1]),
+                            // control characters with short escapes
+                            // TODO: option to switch between unicode and 'short' forms?
                             0x8 => try output(context, "\\b"),
                             0xC => try output(context, "\\f"),
                             '\n' => try output(context, "\\n"),
@@ -2491,22 +2524,12 @@ pub fn stringify(
                             '\t' => try output(context, "\\t"),
                             else => {
                                 const ulen = std.unicode.utf8ByteSequenceLength(value[i]) catch unreachable;
-                                const codepoint = std.unicode.utf8Decode(value[i .. i + ulen]) catch unreachable;
-                                if (codepoint <= 0xFFFF) {
-                                    // If the character is in the Basic Multilingual Plane (U+0000 through U+FFFF),
-                                    // then it may be represented as a six-character sequence: a reverse solidus, followed
-                                    // by the lowercase letter u, followed by four hexadecimal digits that encode the character's code point.
-                                    try output(context, "\\u");
-                                    try std.fmt.formatIntValue(codepoint, "x", std.fmt.FormatOptions{ .width = 4, .fill = '0' }, context, Errors, output);
+                                // control characters (only things left with 1 byte length) should always be printed as unicode escapes
+                                if (ulen == 1 or options.escape_unicode) {
+                                    const codepoint = std.unicode.utf8Decode(value[i .. i + ulen]) catch unreachable;
+                                    try outputUnicodeEscape(codepoint, context, Errors, output);
                                 } else {
-                                    // To escape an extended character that is not in the Basic Multilingual Plane,
-                                    // the character is represented as a 12-character sequence, encoding the UTF-16 surrogate pair.
-                                    const high = @intCast(u16, (codepoint - 0x10000) >> 10) + 0xD800;
-                                    const low = @intCast(u16, codepoint & 0x3FF) + 0xDC00;
-                                    try output(context, "\\u");
-                                    try std.fmt.formatIntValue(high, "x", std.fmt.FormatOptions{ .width = 4, .fill = '0' }, context, Errors, output);
-                                    try output(context, "\\u");
-                                    try std.fmt.formatIntValue(low, "x", std.fmt.FormatOptions{ .width = 4, .fill = '0' }, context, Errors, output);
+                                    try output(context, value[i .. i + ulen]);
                                 }
                                 i += ulen - 1;
                             },
@@ -2608,15 +2631,25 @@ test "stringify basic types" {
 test "stringify string" {
     try teststringify("\"hello\"", "hello", StringifyOptions{});
     try teststringify("\"with\\nescapes\\r\"", "with\nescapes\r", StringifyOptions{});
+    try teststringify("\"with\\nescapes\\r\"", "with\nescapes\r", StringifyOptions{ .escape_unicode = true });
     try teststringify("\"with unicode\\u0001\"", "with unicode\u{1}", StringifyOptions{});
-    try teststringify("\"with unicode\\u0080\"", "with unicode\u{80}", StringifyOptions{});
-    try teststringify("\"with unicode\\u00ff\"", "with unicode\u{FF}", StringifyOptions{});
-    try teststringify("\"with unicode\\u0100\"", "with unicode\u{100}", StringifyOptions{});
-    try teststringify("\"with unicode\\u0800\"", "with unicode\u{800}", StringifyOptions{});
-    try teststringify("\"with unicode\\u8000\"", "with unicode\u{8000}", StringifyOptions{});
-    try teststringify("\"with unicode\\ud799\"", "with unicode\u{D799}", StringifyOptions{});
-    try teststringify("\"with unicode\\ud800\\udc00\"", "with unicode\u{10000}", StringifyOptions{});
-    try teststringify("\"with unicode\\udbff\\udfff\"", "with unicode\u{10FFFF}", StringifyOptions{});
+    try teststringify("\"with unicode\\u0001\"", "with unicode\u{1}", StringifyOptions{ .escape_unicode = true });
+    try teststringify("\"with unicode\u{80}\"", "with unicode\u{80}", StringifyOptions{});
+    try teststringify("\"with unicode\\u0080\"", "with unicode\u{80}", StringifyOptions{ .escape_unicode = true });
+    try teststringify("\"with unicode\u{FF}\"", "with unicode\u{FF}", StringifyOptions{});
+    try teststringify("\"with unicode\\u00ff\"", "with unicode\u{FF}", StringifyOptions{ .escape_unicode = true });
+    try teststringify("\"with unicode\u{100}\"", "with unicode\u{100}", StringifyOptions{});
+    try teststringify("\"with unicode\\u0100\"", "with unicode\u{100}", StringifyOptions{ .escape_unicode = true });
+    try teststringify("\"with unicode\u{800}\"", "with unicode\u{800}", StringifyOptions{});
+    try teststringify("\"with unicode\\u0800\"", "with unicode\u{800}", StringifyOptions{ .escape_unicode = true });
+    try teststringify("\"with unicode\u{8000}\"", "with unicode\u{8000}", StringifyOptions{});
+    try teststringify("\"with unicode\\u8000\"", "with unicode\u{8000}", StringifyOptions{ .escape_unicode = true });
+    try teststringify("\"with unicode\u{D799}\"", "with unicode\u{D799}", StringifyOptions{});
+    try teststringify("\"with unicode\\ud799\"", "with unicode\u{D799}", StringifyOptions{ .escape_unicode = true });
+    try teststringify("\"with unicode\u{10000}\"", "with unicode\u{10000}", StringifyOptions{});
+    try teststringify("\"with unicode\\ud800\\udc00\"", "with unicode\u{10000}", StringifyOptions{ .escape_unicode = true });
+    try teststringify("\"with unicode\u{10FFFF}\"", "with unicode\u{10FFFF}", StringifyOptions{});
+    try teststringify("\"with unicode\\udbff\\udfff\"", "with unicode\u{10FFFF}", StringifyOptions{ .escape_unicode = true });
 }
 
 test "stringify tagged unions" {
