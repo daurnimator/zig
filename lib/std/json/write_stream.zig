@@ -5,17 +5,14 @@ const maxInt = std.math.maxInt;
 const State = enum {
     Complete,
     Value,
-    ArrayStart,
     Array,
-    ObjectStart,
     Object,
 };
 
 /// Writes JSON ([RFC8259](https://tools.ietf.org/html/rfc8259)) formatted data
-/// to a stream. `max_depth` is a comptime-known upper bound on the nesting depth.
-/// TODO A future iteration of this API will allow passing `null` for this value,
-/// and disable safety checks in release builds.
-pub fn WriteStream(comptime OutStream: type, comptime max_depth: usize) type {
+/// to a stream. `max_depth` is a comptime-known upper bound on the nesting depth,
+/// pass `null` for this value to disable safety checks.
+pub fn WriteStream(comptime OutStream: type, comptime max_depth: ?usize) type {
     return struct {
         const Self = @This();
 
@@ -27,125 +24,127 @@ pub fn WriteStream(comptime OutStream: type, comptime max_depth: usize) type {
         },
 
         stream: *OutStream,
-        state_index: usize,
-        state: [max_depth]State,
+
+        need_comma: bool,
+        const state_tracking = max_depth != null;
+        const StateStack = if (state_tracking)
+            struct {
+                index: usize,
+                stack: [max_depth.?]State,
+
+                fn push(state_stack: *StateStack, state: State) void {
+                    state_stack.index += 1;
+                    state_stack.stack[state_stack.index] = state;
+                }
+
+                fn pop(state_stack: *StateStack) void {
+                    state_stack.stack[state_stack.index] = undefined;
+                    state_stack.index -= 1;
+                }
+
+                fn check(state_stack: StateStack, wanted: State) void {
+                    assert(state_stack.stack[state_stack.index] == wanted);
+                }
+            }
+        else
+            void;
+        state_stack: StateStack,
 
         pub fn init(stream: *OutStream) Self {
-            var self = Self{
+            var state_stack: StateStack = undefined;
+            if (state_tracking) {
+                state_stack = .{
+                    .index = 1,
+                    .stack = undefined,
+                };
+                state_stack.stack[0] = .Complete;
+                state_stack.stack[1] = .Value;
+            }
+            return Self{
                 .stream = stream,
-                .state_index = 1,
-                .state = undefined,
+                .need_comma = false,
+                .state_stack = state_stack,
             };
-            self.state[0] = .Complete;
-            self.state[1] = .Value;
-            return self;
         }
 
         pub fn beginArray(self: *Self) !void {
-            assert(self.state[self.state_index] == State.Value); // need to call arrayElem or objectField
+            if (state_tracking) self.state_stack.check(.Value); // need to call arrayElem or objectField
             try self.stream.writeByte('[');
-            self.state[self.state_index] = State.ArrayStart;
+            if (state_tracking) {
+                self.state_stack.stack[self.state_stack.index] = .Array;
+            }
+            self.need_comma = false;
             self.whitespace.indent_level += 1;
         }
 
         pub fn beginObject(self: *Self) !void {
-            assert(self.state[self.state_index] == State.Value); // need to call arrayElem or objectField
+            if (state_tracking) self.state_stack.check(.Value); // need to call arrayElem or objectField
             try self.stream.writeByte('{');
-            self.state[self.state_index] = State.ObjectStart;
+            if (state_tracking) {
+                self.state_stack.stack[self.state_stack.index] = .Object;
+            }
+            self.need_comma = false;
             self.whitespace.indent_level += 1;
         }
 
         pub fn arrayElem(self: *Self) !void {
-            const state = self.state[self.state_index];
-            switch (state) {
-                .Complete => unreachable,
-                .Value => unreachable,
-                .ObjectStart => unreachable,
-                .Object => unreachable,
-                .Array, .ArrayStart => {
-                    if (state == .Array) {
-                        try self.stream.writeByte(',');
-                    }
-                    self.state[self.state_index] = .Array;
-                    self.pushState(.Value);
-                    try self.indent();
-                },
+            if (state_tracking) self.state_stack.check(.Array);
+            if (self.need_comma) {
+                try self.stream.writeByte(',');
+            } else {
+                self.need_comma = true;
             }
+            if (state_tracking) self.state_stack.push(.Value);
+            try self.indent();
         }
 
         pub fn objectField(self: *Self, name: []const u8) !void {
-            const state = self.state[self.state_index];
-            switch (state) {
-                .Complete => unreachable,
-                .Value => unreachable,
-                .ArrayStart => unreachable,
-                .Array => unreachable,
-                .Object, .ObjectStart => {
-                    if (state == .Object) {
-                        try self.stream.writeByte(',');
-                    }
-                    self.state[self.state_index] = .Object;
-                    self.pushState(.Value);
-                    try self.indent();
-                    try self.writeEscapedString(name);
-                    try self.stream.write(":");
-                    if (self.whitespace.separator) {
-                        try self.stream.write(" ");
-                    }
-                },
+            if (state_tracking) self.state_stack.check(.Object);
+            if (self.need_comma) {
+                try self.stream.writeByte(',');
+            }
+            // No need to set `self.need_comma = true;` it's done by writeEscapedString below
+            if (state_tracking) self.state_stack.push(.Value);
+            try self.indent();
+            try self.writeEscapedString(name);
+            try self.stream.writeByte(':');
+            if (self.whitespace.separator) {
+                try self.stream.writeByte(' ');
             }
         }
 
         pub fn endArray(self: *Self) !void {
-            switch (self.state[self.state_index]) {
-                .Complete => unreachable,
-                .Value => unreachable,
-                .ObjectStart => unreachable,
-                .Object => unreachable,
-                .ArrayStart => {
-                    self.whitespace.indent_level -= 1;
-                    try self.stream.writeByte(']');
-                    self.popState();
-                },
-                .Array => {
-                    self.whitespace.indent_level -= 1;
-                    try self.indent();
-                    self.popState();
-                    try self.stream.writeByte(']');
-                },
+            if (state_tracking) self.state_stack.check(.Array);
+            self.whitespace.indent_level -= 1;
+            if (self.need_comma) {
+                try self.indent();
             }
+            self.need_comma = true;
+            if (state_tracking) self.state_stack.pop();
+            try self.stream.writeByte(']');
         }
 
         pub fn endObject(self: *Self) !void {
-            switch (self.state[self.state_index]) {
-                .Complete => unreachable,
-                .Value => unreachable,
-                .ArrayStart => unreachable,
-                .Array => unreachable,
-                .ObjectStart => {
-                    self.whitespace.indent_level -= 1;
-                    try self.stream.writeByte('}');
-                    self.popState();
-                },
-                .Object => {
-                    self.whitespace.indent_level -= 1;
-                    try self.indent();
-                    self.popState();
-                    try self.stream.writeByte('}');
-                },
+            if (state_tracking) self.state_stack.check(.Object);
+            self.whitespace.indent_level -= 1;
+            if (self.need_comma) {
+                try self.indent();
             }
+            self.need_comma = true;
+            if (state_tracking) self.state_stack.pop();
+            try self.stream.writeByte('}');
         }
 
         pub fn emitNull(self: *Self) !void {
-            assert(self.state[self.state_index] == State.Value);
+            if (state_tracking) self.state_stack.check(.Value);
             try self.stringify(null);
-            self.popState();
+            self.state_stack.pop();
         }
 
         pub fn emitBool(self: *Self, value: bool) !void {
-            assert(self.state[self.state_index] == State.Value);
+            if (state_tracking) self.state_stack.check(.Value);
             try self.stringify(value);
-            self.popState();
+            self.state_stack.pop();
         }
 
         pub fn emitNumber(
@@ -154,34 +153,29 @@ pub fn WriteStream(comptime OutStream: type, comptime max_depth: usize) type {
             /// in a IEEE 754 double float, otherwise emitted as a string to the full precision.
             value: var,
         ) !void {
-            assert(self.state[self.state_index] == State.Value);
+            if (state_tracking) self.state_stack.check(.Value);
             switch (@typeInfo(@TypeOf(value))) {
                 .Int => |info| {
                     if (info.bits < 53) {
                         try self.stream.print("{}", .{value});
-                        self.popState();
-                        return;
-                    }
-                    if (value < 4503599627370496 and (!info.is_signed or value > -4503599627370496)) {
+                    } else if (value < 4503599627370496 and (!info.is_signed or value > -4503599627370496)) {
                         try self.stream.print("{}", .{value});
-                        self.popState();
-                        return;
                     }
                 },
                 .Float => if (@floatCast(f64, value) == value) {
                     try self.stream.print("{}", .{value});
-                    self.popState();
-                    return;
                 },
-                else => {},
+                else => {
+                    try self.stream.print("\"{}\"", .{value});
+                },
             }
-            try self.stream.print("\"{}\"", .{value});
-            self.popState();
+            self.need_comma = true;
+            self.state_stack.pop();
         }
 
         pub fn emitString(self: *Self, string: []const u8) !void {
             try self.writeEscapedString(string);
-            self.popState();
+            self.state_stack.pop();
         }
 
         fn writeEscapedString(self: *Self, string: []const u8) !void {
@@ -192,27 +186,22 @@ pub fn WriteStream(comptime OutStream: type, comptime max_depth: usize) type {
         /// Writes the complete json into the output stream
         pub fn emitJson(self: *Self, json: std.json.Value) Stream.Error!void {
             try self.stringify(json);
+            self.state_stack.pop();
         }
 
         fn indent(self: *Self) !void {
-            assert(self.state_index >= 1);
-            try self.stream.write("\n");
+            if (state_tracking) {
+                assert(self.state_stack.index >= 1);
+            }
+            try self.stream.writeByte('\n');
             try self.whitespace.outputIndent(self.stream, OutStream.Error, OutStream.write);
-        }
-
-        fn pushState(self: *Self, state: State) void {
-            self.state_index += 1;
-            self.state[self.state_index] = state;
-        }
-
-        fn popState(self: *Self) void {
-            self.state_index -= 1;
         }
 
         fn stringify(self: *Self, value: var) !void {
             try std.json.stringify(value, std.json.StringifyOptions{
                 .whitespace = self.whitespace,
             }, self.stream, OutStream.Error, OutStream.write);
+            self.need_comma = true;
         }
     };
 }
