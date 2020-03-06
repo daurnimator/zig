@@ -1147,25 +1147,226 @@ pub const UNICODE_STRING = extern struct {
     Buffer: [*]WCHAR,
 };
 
+const ACTIVATION_CONTEXT = @OpaqueType();
 const ACTIVATION_CONTEXT_DATA = @OpaqueType();
+
+pub const RTL_ACTIVATION_CONTEXT_STACK_FRAME = extern struct {
+    Previous: *RTL_ACTIVATION_CONTEXT_STACK_FRAME,
+    ActivationContext: *ACTIVATION_CONTEXT,
+    Flags: ULONG,
+};
+
+pub const ACTIVATION_CONTEXT_STACK = extern struct {
+    Flags: ULONG,
+    NextCookieSequenceNumber: ULONG,
+    ActiveFrame: *RTL_ACTIVATION_CONTEXT_STACK_FRAME,
+    FrameListCache: LIST_ENTRY,
+};
+
 const ASSEMBLY_STORAGE_MAP = @OpaqueType();
 const FLS_CALLBACK_INFO = @OpaqueType();
 const RTL_BITMAP = @OpaqueType();
 pub const PRTL_BITMAP = *RTL_BITMAP;
 const KAFFINITY = usize;
-
-pub const TEB = extern struct {
-    Reserved1: [12]PVOID,
-    ProcessEnvironmentBlock: *PEB,
-    Reserved2: [399]PVOID,
-    Reserved3: [1952]u8,
-    TlsSlots: [64]PVOID,
-    Reserved4: [8]u8,
-    Reserved5: [26]PVOID,
-    ReservedForOle: PVOID,
-    Reserved6: [4]PVOID,
-    TlsExpansionSlots: PVOID,
+const PROCESSOR_NUMBER = extern struct {
+    Group: USHORT,
+    Number: UCHAR,
+    Reserved: UCHAR,
 };
+const EXCEPTION_REGISTRATION_RECORD = @OpaqueType();
+const NT_TIB = extern struct {
+    ExceptionList: ?*EXCEPTION_REGISTRATION_RECORD,
+    StackBase: PVOID,
+    StackLimit: PVOID,
+    SubSystemTib: PVOID,
+    FiberData: PVOID,
+    ArbitraryUserPointer: PVOID,
+    Self: *NT_TIB,
+};
+const TEB_ACTIVE_FRAME_CONTEXT = extern struct {
+    Flags: ULONG,
+    FrameName: LPCSTR,
+};
+const TEB_ACTIVE_FRAME = extern struct {
+    Flags: ULONG,
+    Previous: ?*TEB_ACTIVE_FRAME,
+    Context: *TEB_ACTIVE_FRAME_CONTEXT,
+};
+const GDI_TEB_BATCH = packed struct {
+    Offset: u31,
+    HasRenderingCommand: bool,
+    HDC: ULONGLONG,
+    Buffer: [310]ULONG,
+};
+const CLIENT_ID = packed struct {
+    UniqueProcess: PVOID,
+    UniqueThread: PVOID,
+};
+
+/// Thread Environment Block
+/// Microsoft documentation of this is incomplete, the fields here are taken from various resources including:
+///  - https://github.com/wine-mirror/wine/blob/1aff1e6a370ee8c0213a0fd4b220d121da8527aa/include/winternl.h#L347-L418
+///  - https://www.geoffchappell.com/studies/windows/win32/ntdll/structs/teb/index.htm
+///  - https://www.vergiliusproject.com/kernels/x86/Windows%2010/1909%2019H2%20(November%202019%20Update)/_TEB
+///  - https://www.vergiliusproject.com/kernels/x64/Windows%2010%20|%202016/1909%2019H2%20(November%202019%20Update)/_TEB
+pub const TEB = extern struct {
+    NtTib: NT_TIB,
+    EnvironmentPointer: PVOID,
+    ClientId: [2]PVOID,
+    ActiveRpcHandle: PVOID,
+
+    /// The ThreadLocalStoragePointer instead deals with the thread-local
+    /// storage that may show in the Thread Local Storage directory of the
+    /// module’s Portable Executable (PE) header.
+    ThreadLocalStoragePointer: PVOID,
+
+    ProcessEnvironmentBlock: *PEB,
+
+    /// This is the storage location accessed by the win32 `GetLastError` function.
+    LastErrorValue: ULONG,
+
+    CountOfOwnedCriticalSections: ULONG,
+
+    CsrClientThread: PVOID,
+
+    Win32ThreadInfo: PVOID,
+
+    User32Reserved: [0x1A]ULONG,
+    UserReserved: [5]ULONG,
+    WOW32Reserved: PVOID,
+
+    /// The storage location used by win32 functions `GetThreadLocale` and `SetThreadLocale`
+    CurrentLocale: ULONG,
+
+    FpSoftwareStatusRegister: ULONG,
+
+    ReservedForDebuggerInstrumentation: [0x10]PVOID,
+    SystemReserved1: [0x1A]PVOID,
+    PlaceholderCompatibilityMode: CHAR,
+    PlaceholderReserved: [0x0B]CHAR,
+    ProxiedProcessId: DWORD,
+    ActivationStack: ACTIVATION_CONTEXT_STACK,
+    WorkingOnBehalfOfTicket: [8]UCHAR,
+
+    /// Used by kernel in `KeRaiseUserException`
+    ExceptionCode: LONG,
+
+    Padding0: [switch (@sizeOf(usize)) {
+        4 => 0,
+        8 => 4,
+        else => unreachable,
+    }]UCHAR,
+
+    ActivationContextStackPointer: *ACTIVATION_CONTEXT_STACK,
+
+    InstrumentationCallbackSp: ULONG_PTR,
+    InstrumentationCallbackPreviousPc: ULONG_PTR,
+    InstrumentationCallbackPreviousSp: ULONG_PTR,
+    TxFsContext: ULONG,
+    InstrumentationCallbackDisabled: UCHAR,
+    UnalignedLoadStoreExceptions: UCHAR,
+    Padding1: [2]UCHAR,
+    GdiTebBatch: GDI_TEB_BATCH,
+    RealClientId: CLIENT_ID,
+    GdiCachedProcessHandle: PVOID,
+    GdiClientPID: ULONG,
+    GdiClientTID: ULONG,
+    GdiThreadLocalInfo: PVOID,
+    Win32ClientInfo: [0x3E]ULONG_PTR,
+    glDispatchTable: [0xE9]PVOID,
+    glReserved1: [0x1D]ULONG_PTR,
+    glReserved2: PVOID,
+    glSectionInfo: PVOID,
+    glSection: PVOID,
+    glTable: PVOID,
+    glCurrentRC: PVOID,
+    glContext: PVOID,
+    LastStatusValue: ULONG,
+    Padding2: [4]UCHAR,
+    StaticUnicodeString: UNICODE_STRING,
+    StaticUnicodeBuffer: [MAX_PATH + 1]WCHAR,
+    Padding3: [6]UCHAR,
+    DeallocationStack: PVOID,
+    TlsSlots: [0x40]PVOID,
+    TlsLinks: LIST_ENTRY,
+    Vdm: PVOID,
+    ReservedForNtRpc: PVOID,
+    DbgSsReserved: [2]PVOID,
+    HardErrorMode: ULONG,
+    Padding4: [4]UCHAR,
+    Instrumentation: [11]PVOID,
+    ActivityId: GUID,
+    SubProcessTag: PVOID,
+    PerflibData: PVOID,
+    EtwTraceData: PVOID,
+    WinSockData: PVOID,
+    GdiBatchCount: ULONG,
+    IdealProcessor: PROCESSOR_NUMBER,
+
+    /// A duplicate of the `IdealProcessor.Number` field seemingly kept by windows for compatibility.
+    IdealProcessorNumber: UCHAR,
+
+    GuaranteedStackBytes: ULONG,
+    Padding5: [4]UCHAR,
+    ReservedForPerf: PVOID,
+    ReservedForOle: PVOID,
+    WaitingOnLoaderLock: ULONG,
+    Padding6: [4]UCHAR,
+    SavedPriorityState: PVOID,
+    ReservedForCodeCoverage: ULONG_PTR,
+    ThreadPoolData: PVOID,
+    TlsExpansionSlots: *PVOID,
+    DeallocationBStore: PVOID,
+    BStoreLimit: PVOID,
+    MuiGeneration: ULONG,
+    IsImpersonating: ULONG,
+    NlsCache: PVOID,
+    pShimData: PVOID,
+    HeapData: ULONG,
+    Padding7: [4]UCHAR,
+    CurrentTransactionHandle: PVOID,
+    ActiveFrame: *TEB_ACTIVE_FRAME,
+    FlsData: PVOID,
+    PreferredLanguages: PVOID,
+    UserPrefLanguages: PVOID,
+    MergedPrefLanguages: PVOID,
+    MuiImpersonation: ULONG,
+    CrossTebFlags: USHORT, // TODO: volatile?
+    SameTebFlags: packed struct {
+        SafeThunkCall: bool,
+        InDebugPrint: bool,
+        HasFiberData: bool,
+        SkipThreadAttach: bool,
+        WerInShipAssertCode: bool,
+        RanProcessInit: bool,
+        ClonedThread: bool,
+        SuppressDebugMsg: bool,
+        DisableUserStackWalk: bool,
+        RtlExceptionAttached: bool,
+        InitialThread: bool,
+        SessionAware: bool,
+        LoadOwner: bool,
+        LoaderWorker: bool,
+        SkipLoaderInit: bool,
+        SpareSameTebBits: bool,
+    },
+    TxnScopeEnterCallback: PVOID,
+    TxnScopeExitCallback: PVOID,
+    TxnScopeContext: PVOID,
+    LockCount: ULONG,
+    WowTebOffset: LONG,
+    ResourceRetValue: PVOID,
+    ReservedForWdf: PVOID,
+    ReservedForCrt: ULONGLONG,
+    EffectiveContainerId: GUID,
+};
+comptime {
+    assert(@sizeOf(TEB) == switch (builtin.arch) {
+        .i386 => 0x1000,
+        .x86_64 => 0x1838,
+        else => unreachable,
+    });
+}
 
 /// Process Environment Block
 /// Microsoft documentation of this is incomplete, the fields here are taken from various resources including:
