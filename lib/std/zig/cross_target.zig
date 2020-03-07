@@ -488,16 +488,18 @@ pub const CrossTarget = struct {
             self.abi == null and self.dynamic_linker.get() == null and self.glibc_version == null;
     }
 
-    pub fn zigTriple(self: CrossTarget, allocator: *mem.Allocator) error{OutOfMemory}![:0]u8 {
+    pub fn zigTriple(self: CrossTarget, allocator: *mem.Allocator) error{OutOfMemory}![]u8 {
         if (self.isNative()) {
-            return mem.dupeZ(allocator, u8, "native");
+            return mem.dupe(allocator, u8, "native");
         }
 
         const arch_name = if (self.cpu_arch) |arch| @tagName(arch) else "native";
         const os_name = if (self.os_tag) |os_tag| @tagName(os_tag) else "native";
 
-        var result = try std.Buffer.allocPrint(allocator, "{}-{}", .{ arch_name, os_name });
-        defer result.deinit();
+        var result = std.ArrayList(u8).init(allocator);
+        errdefer result.deinit();
+
+        try result.outStream().print("{}-{}", .{ arch_name, os_name });
 
         // The zig target syntax does not allow specifying a max os version with no min, so
         // if either are present, we need the min.
@@ -525,13 +527,13 @@ pub const CrossTarget = struct {
         return result.toOwnedSlice();
     }
 
-    pub fn allocDescription(self: CrossTarget, allocator: *mem.Allocator) ![:0]u8 {
+    pub fn allocDescription(self: CrossTarget, allocator: *mem.Allocator) ![]u8 {
         // TODO is there anything else worthy of the description that is not
         // already captured in the triple?
         return self.zigTriple(allocator);
     }
 
-    pub fn linuxTriple(self: CrossTarget, allocator: *mem.Allocator) ![:0]u8 {
+    pub fn linuxTriple(self: CrossTarget, allocator: *mem.Allocator) ![]u8 {
         return Target.linuxTripleSimple(allocator, self.getCpuArch(), self.getOsTag(), self.getAbi());
     }
 
@@ -542,7 +544,7 @@ pub const CrossTarget = struct {
     pub const VcpkgLinkage = std.builtin.LinkMode;
 
     /// Returned slice must be freed by the caller.
-    pub fn vcpkgTriplet(self: CrossTarget, allocator: *mem.Allocator, linkage: VcpkgLinkage) ![:0]u8 {
+    pub fn vcpkgTriplet(self: CrossTarget, allocator: *mem.Allocator, linkage: VcpkgLinkage) ![]u8 {
         const arch = switch (self.getCpuArch()) {
             .i386 => "x86",
             .x86_64 => "x64",
@@ -573,7 +575,7 @@ pub const CrossTarget = struct {
             .Dynamic => "",
         };
 
-        return std.fmt.allocPrint0(allocator, "{}-{}{}", .{ arch, os, static_suffix });
+        return std.fmt.allocPrint(allocator, "{}-{}{}", .{ arch, os, static_suffix });
     }
 
     pub const Executor = union(enum) {
