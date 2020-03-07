@@ -1138,7 +1138,7 @@ pub const LibExeObjStep = struct {
     out_lib_filename: []const u8,
     out_pdb_filename: []const u8,
     packages: ArrayList(Pkg),
-    build_options_contents: std.Buffer,
+    build_options_contents: std.ArrayList(u8),
     system_linker_hack: bool = false,
 
     object_src: []const u8,
@@ -1267,7 +1267,7 @@ pub const LibExeObjStep = struct {
             .lib_paths = ArrayList([]const u8).init(builder.allocator),
             .framework_dirs = ArrayList([]const u8).init(builder.allocator),
             .object_src = undefined,
-            .build_options_contents = std.Buffer.initSize(builder.allocator, 0) catch unreachable,
+            .build_options_contents = std.ArrayList(u8).init(builder.allocator),
             .c_std = Builder.CStd.C99,
             .override_lib_dir = null,
             .main_pkg_path = null,
@@ -1672,7 +1672,7 @@ pub const LibExeObjStep = struct {
     }
 
     pub fn addBuildOption(self: *LibExeObjStep, comptime T: type, name: []const u8, value: T) void {
-        const out = &std.io.BufferOutStream.init(&self.build_options_contents).stream;
+        const out = self.build_options_contents.outStream();
         out.print("pub const {} = {};\n", .{ name, value }) catch unreachable;
     }
 
@@ -1843,12 +1843,12 @@ pub const LibExeObjStep = struct {
             }
         }
 
-        if (self.build_options_contents.len() > 0) {
+        if (self.build_options_contents.len > 0) {
             const build_options_file = try fs.path.join(
                 builder.allocator,
                 &[_][]const u8{ builder.cache_root, builder.fmt("{}_build_options.zig", .{self.name}) },
             );
-            try std.io.writeFile(build_options_file, self.build_options_contents.toSliceConst());
+            try std.io.writeFile(build_options_file, self.build_options_contents.span());
             try zig_args.append("--pkg-begin");
             try zig_args.append("build_options");
             try zig_args.append(builder.pathFromRoot(build_options_file));
@@ -1956,22 +1956,22 @@ pub const LibExeObjStep = struct {
                     try zig_args.append(cross.cpu.model.name);
                 }
             } else {
-                var mcpu_buffer = try std.Buffer.init(builder.allocator, "-mcpu=");
-                try mcpu_buffer.append(cross.cpu.model.name);
+                var mcpu_buffer = std.ArrayList(u8).init(builder.allocator);
+                errdefer mcpu_buffer.deinit();
+
+                try mcpu_buffer.outStream().print("-mcpu={}", .{cross.cpu.model.name});
 
                 for (all_features) |feature, i_usize| {
                     const i = @intCast(std.Target.Cpu.Feature.Set.Index, i_usize);
                     const in_cpu_set = populated_cpu_features.isEnabled(i);
                     const in_actual_set = cross.cpu.features.isEnabled(i);
                     if (in_cpu_set and !in_actual_set) {
-                        try mcpu_buffer.appendByte('-');
-                        try mcpu_buffer.append(feature.name);
+                        try mcpu_buffer.outStream().print("-{}", .{feature.name});
                     } else if (!in_cpu_set and in_actual_set) {
-                        try mcpu_buffer.appendByte('+');
-                        try mcpu_buffer.append(feature.name);
+                        try mcpu_buffer.outStream().print("+{}", .{feature.name});
                     }
                 }
-                try zig_args.append(mcpu_buffer.toSliceConst());
+                try zig_args.append(mcpu_buffer.toOwnedSlice());
             }
 
             if (self.target.dynamic_linker.get()) |dynamic_linker| {
