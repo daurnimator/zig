@@ -158,14 +158,13 @@ pub const Msg = struct {
         parse_error: *const ast.Error,
     ) !*Msg {
         const loc_token = parse_error.loc();
-        var text_buf = try std.Buffer.initSize(comp.gpa(), 0);
+        var text_buf = std.ArrayList(u8).init(comp.gpa());
         defer text_buf.deinit();
 
         const realpath_copy = try mem.dupe(comp.gpa(), u8, tree_scope.root().realpath);
         errdefer comp.gpa().free(realpath_copy);
 
-        var out_stream = &std.io.BufferOutStream.init(&text_buf).stream;
-        try parse_error.render(&tree_scope.tree.tokens, out_stream);
+        try parse_error.render(&tree_scope.tree.tokens, text_buf.outStream());
 
         const msg = try comp.gpa().create(Msg);
         msg.* = Msg{
@@ -198,14 +197,13 @@ pub const Msg = struct {
         realpath: []const u8,
     ) !*Msg {
         const loc_token = parse_error.loc();
-        var text_buf = try std.Buffer.initSize(allocator, 0);
+        var text_buf = std.ArrayList(u8).init(allocator);
         defer text_buf.deinit();
 
         const realpath_copy = try mem.dupe(allocator, u8, realpath);
         errdefer allocator.free(realpath_copy);
 
-        var out_stream = &std.io.BufferOutStream.init(&text_buf).stream;
-        try parse_error.render(&tree.tokens, out_stream);
+        try parse_error.render(&tree.tokens, text_buf.outStream());
 
         const msg = try allocator.create(Msg);
         msg.* = Msg{
