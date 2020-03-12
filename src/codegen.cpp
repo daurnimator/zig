@@ -10442,11 +10442,11 @@ static Error check_cache(CodeGen *g, Buf *manifest_dir, Buf *digest) {
     cache_list_of_str(ch, g->lib_dirs.items, g->lib_dirs.length);
     cache_list_of_str(ch, g->framework_dirs.items, g->framework_dirs.length);
     if (g->libc) {
-        cache_str(ch, g->libc->include_dir);
-        cache_str(ch, g->libc->sys_include_dir);
-        cache_str(ch, g->libc->crt_dir);
-        cache_str(ch, g->libc->msvc_lib_dir);
-        cache_str(ch, g->libc->kernel32_lib_dir);
+        cache_slice(ch, Slice<uint8_t>{g->libc->include_dir, g->libc->include_dir_len});
+        cache_slice(ch, Slice<uint8_t>{g->libc->sys_include_dir, g->libc->sys_include_dir_len});
+        cache_slice(ch, Slice<uint8_t>{g->libc->crt_dir, g->libc->crt_dir_len});
+        cache_slice(ch, Slice<uint8_t>{g->libc->msvc_lib_dir, g->libc->msvc_lib_dir_len});
+        cache_slice(ch, Slice<uint8_t>{g->libc->kernel32_lib_dir, g->libc->kernel32_lib_dir_len});
     }
     cache_buf_opt(ch, g->version_script_path);
 

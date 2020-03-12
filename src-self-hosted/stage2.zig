@@ -791,19 +791,19 @@ const Stage2LibCInstallation = extern struct {
     fn toStage2(self: Stage2LibCInstallation) LibCInstallation {
         var libc: LibCInstallation = .{};
         if (self.include_dir_len != 0) {
-            libc.include_dir = self.include_dir[0..self.include_dir_len :0];
+            libc.include_dir = self.include_dir[0..self.include_dir_len];
         }
         if (self.sys_include_dir_len != 0) {
-            libc.sys_include_dir = self.sys_include_dir[0..self.sys_include_dir_len :0];
+            libc.sys_include_dir = self.sys_include_dir[0..self.sys_include_dir_len];
         }
         if (self.crt_dir_len != 0) {
-            libc.crt_dir = self.crt_dir[0..self.crt_dir_len :0];
+            libc.crt_dir = self.crt_dir[0..self.crt_dir_len];
         }
         if (self.msvc_lib_dir_len != 0) {
-            libc.msvc_lib_dir = self.msvc_lib_dir[0..self.msvc_lib_dir_len :0];
+            libc.msvc_lib_dir = self.msvc_lib_dir[0..self.msvc_lib_dir_len];
         }
         if (self.kernel32_lib_dir_len != 0) {
-            libc.kernel32_lib_dir = self.kernel32_lib_dir[0..self.kernel32_lib_dir_len :0];
+            libc.kernel32_lib_dir = self.kernel32_lib_dir[0..self.kernel32_lib_dir_len];
         }
         return libc;
     }

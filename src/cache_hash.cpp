@@ -65,6 +65,11 @@ void cache_buf(CacheHash *ch, Buf *buf) {
     blake2b_update(&ch->blake, buf_ptr(buf), buf_len(buf) + 1);
 }
 
+void cache_slice(CacheHash *ch, Slice<uint8_t> slice) {
+    assert(ch->manifest_file_path == nullptr);
+    blake2b_update(&ch->blake, slice.ptr, slice.len);
+}
+
 void cache_buf_opt(CacheHash *ch, Buf *buf) {
     assert(ch->manifest_file_path == nullptr);
     if (buf == nullptr) {

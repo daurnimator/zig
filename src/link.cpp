@@ -2235,11 +2235,16 @@ static void construct_linker_job_coff(LinkJob *lj) {
         lj->args.append(buf_ptr(buf_sprintf("-LIBPATH:%s", g->libc->crt_dir)));
 
         if (target_abi_is_gnu(g->zig_target->abi)) {
-            lj->args.append(buf_ptr(buf_sprintf("-LIBPATH:%s", g->libc->sys_include_dir)));
-            lj->args.append(buf_ptr(buf_sprintf("-LIBPATH:%s", g->libc->include_dir)));
+            auto buff = buf_init_from_str("-LIBPATH:");
+            buf_append_mem(buff, g->libc->sys_include_dir, g->libc->sys_include_dir_len);
+            lj->args.append(buf_ptr(buff));
         } else {
-            lj->args.append(buf_ptr(buf_sprintf("-LIBPATH:%s", g->libc->msvc_lib_dir)));
-            lj->args.append(buf_ptr(buf_sprintf("-LIBPATH:%s", g->libc->kernel32_lib_dir)));
+            auto buff1 = buf_init_from_str("-LIBPATH:");
+            buf_append_mem(buff1, g->libc->msvc_lib_dir, g->libc->msvc_lib_dir_len);
+            lj->args.append(buf_ptr(buff1));
+            auto buff2 = buf_init_from_str("-LIBPATH:");
+            buf_append_mem(buff2, g->libc->kernel32_lib_dir, g->libc->kernel32_lib_dir_len);
+            lj->args.append(buf_ptr(buff2));
         }
     }
 
