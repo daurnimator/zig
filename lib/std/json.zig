@@ -566,8 +566,11 @@ pub const StreamingParser = struct {
                     p.state = .ValueBeginNoClosing;
                 },
                 ']' => {
+                    if (p.stack & 1 != array_bit) {
+                        return error.UnexpectedClosingBrace;
+                    }
                     if (p.stack_used == 0) {
-                        return error.UnbalancedBrackets;
+                        return error.TooManyClosingItems;
                     }
 
                     p.state = .ValueEnd;
@@ -584,8 +587,12 @@ pub const StreamingParser = struct {
                     token.* = Token.ArrayEnd;
                 },
                 '}' => {
+                    // unlikely
+                    if (p.stack & 1 != object_bit) {
+                        return error.UnexpectedClosingBracket;
+                    }
                     if (p.stack_used == 0) {
-                        return error.UnbalancedBraces;
+                        return error.TooManyClosingItems;
                     }
 
                     p.state = .ValueEnd;
@@ -1202,7 +1209,12 @@ pub fn validate(s: []const u8) bool {
 }
 
 test "json.validate" {
-    testing.expect(validate("{}"));
+    testing.expectEqual(true, validate("{}"));
+    testing.expectEqual(true, validate("[]"));
+    testing.expectEqual(true, validate("[{[[[[{}]]]]}]"));
+    testing.expectEqual(false, validate("{]"));
+    testing.expectEqual(false, validate("[}"));
+    testing.expectEqual(false, validate("{{{{[]}}}]"));
 }
 
 const Allocator = std.mem.Allocator;
