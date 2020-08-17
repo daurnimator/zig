@@ -162,11 +162,10 @@ pub const StreamingParser = struct {
     number_is_integer: bool,
 
     // Bit-stack for nested object/map literals (max 255 nestings).
-    stack: u256,
+    stack: std.PackedIntArray(u1, max_stack_size),
     stack_used: u8,
 
-    const object_bit = 0;
-    const array_bit = 1;
+    const StackElement = enum(u1) { Object = 0, Array = 1 };
     const max_stack_size = maxInt(u8);
 
     pub fn init() StreamingParser {
@@ -181,7 +180,7 @@ pub const StreamingParser = struct {
         // Set before ever read in main transition function
         p.after_string_state = undefined;
         p.after_value_state = .ValueEnd; // handle end of values normally
-        p.stack = 0;
+        p.stack = undefined;
         p.stack_used = 0;
         p.complete = false;
         p.string_escapes = undefined;
@@ -191,10 +190,9 @@ pub const StreamingParser = struct {
     }
 
     pub const State = enum {
-        // These must be first with these explicit values as we rely on them for indexing the
-        // bit-stack directly and avoiding a branch.
-        ObjectSeparator = 0,
-        ValueEnd = 1,
+        // Avoid a branch by keeping them the same as StackElement
+        ObjectSeparator = @enumToInt(StackElement.Object),
+        ValueEnd = @enumToInt(StackElement.Array),
 
         TopLevelBegin,
         TopLevelEnd,
@@ -239,10 +237,8 @@ pub const StreamingParser = struct {
         NullLiteral3,
 
         // Only call this function to generate array/object final state.
-        pub fn fromInt(x: anytype) State {
-            debug.assert(x == 0 or x == 1);
-            const T = @TagType(State);
-            return @intToEnum(State, @intCast(T, x));
+        fn fromStackElement(x: StackElement) State {
+            return @intToEnum(State, @enumToInt(x));
         }
     };
 
@@ -286,9 +282,8 @@ pub const StreamingParser = struct {
         switch (p.state) {
             .TopLevelBegin => switch (c) {
                 '{' => {
-                    p.stack <<= 1;
-                    p.stack |= object_bit;
-                    p.stack_used += 1;
+                    p.stack.set(0, @enumToInt(StackElement.Object));
+                    p.stack_used = 1;
 
                     p.state = .ValueBegin;
                     p.after_string_state = .ObjectSeparator;
@@ -296,9 +291,8 @@ pub const StreamingParser = struct {
                     token.* = Token.ObjectBegin;
                 },
                 '[' => {
-                    p.stack <<= 1;
-                    p.stack |= array_bit;
-                    p.stack_used += 1;
+                    p.stack.set(0, @enumToInt(StackElement.Array));
+                    p.stack_used = 1;
 
                     p.state = .ValueBegin;
                     p.after_string_state = .ValueEnd;
@@ -369,19 +363,14 @@ pub const StreamingParser = struct {
                 // be a bit clearer and avoid this duplication.
                 '}' => {
                     // unlikely
-                    if (p.stack & 1 != object_bit) {
-                        return error.UnexpectedClosingBrace;
-                    }
                     if (p.stack_used == 0) {
                         return error.TooManyClosingItems;
                     }
+                    if (@intToEnum(StackElement, p.stack.get(p.stack_used - 1)) != .Object) {
+                        return error.UnexpectedClosingBrace;
+                    }
 
-                    p.state = .ValueBegin;
-                    p.after_string_state = State.fromInt(p.stack & 1);
-
-                    p.stack >>= 1;
                     p.stack_used -= 1;
-
                     switch (p.stack_used) {
                         0 => {
                             p.complete = true;
@@ -389,25 +378,21 @@ pub const StreamingParser = struct {
                         },
                         else => {
                             p.state = .ValueEnd;
+                            p.after_string_state = State.fromStackElement(@intToEnum(StackElement, p.stack.get(p.stack_used - 1)));
                         },
                     }
 
                     token.* = Token.ObjectEnd;
                 },
                 ']' => {
-                    if (p.stack & 1 != array_bit) {
-                        return error.UnexpectedClosingBracket;
-                    }
                     if (p.stack_used == 0) {
                         return error.TooManyClosingItems;
                     }
+                    if (@intToEnum(StackElement, p.stack.get(p.stack_used - 1)) != .Array) {
+                        return error.UnexpectedClosingBracket;
+                    }
 
-                    p.state = .ValueBegin;
-                    p.after_string_state = State.fromInt(p.stack & 1);
-
-                    p.stack >>= 1;
                     p.stack_used -= 1;
-
                     switch (p.stack_used) {
                         0 => {
                             p.complete = true;
@@ -415,6 +400,7 @@ pub const StreamingParser = struct {
                         },
                         else => {
                             p.state = .ValueEnd;
+                            p.after_string_state = State.fromStackElement(@intToEnum(StackElement, p.stack.get(p.stack_used - 1)));
                         },
                     }
 
@@ -425,8 +411,7 @@ pub const StreamingParser = struct {
                         return error.TooManyNestedItems;
                     }
 
-                    p.stack <<= 1;
-                    p.stack |= object_bit;
+                    p.stack.set(p.stack_used, @enumToInt(StackElement.Object));
                     p.stack_used += 1;
 
                     p.state = .ValueBegin;
@@ -439,8 +424,7 @@ pub const StreamingParser = struct {
                         return error.TooManyNestedItems;
                     }
 
-                    p.stack <<= 1;
-                    p.stack |= array_bit;
+                    p.stack.set(p.stack_used, @enumToInt(StackElement.Array));
                     p.stack_used += 1;
 
                     p.state = .ValueBegin;
@@ -496,8 +480,7 @@ pub const StreamingParser = struct {
                         return error.TooManyNestedItems;
                     }
 
-                    p.stack <<= 1;
-                    p.stack |= object_bit;
+                    p.stack.set(p.stack_used, @enumToInt(StackElement.Object));
                     p.stack_used += 1;
 
                     p.state = .ValueBegin;
@@ -510,8 +493,7 @@ pub const StreamingParser = struct {
                         return error.TooManyNestedItems;
                     }
 
-                    p.stack <<= 1;
-                    p.stack |= array_bit;
+                    p.stack.set(p.stack_used, @enumToInt(StackElement.Array));
                     p.stack_used += 1;
 
                     p.state = .ValueBegin;
@@ -562,48 +544,50 @@ pub const StreamingParser = struct {
 
             .ValueEnd => switch (c) {
                 ',' => {
-                    p.after_string_state = State.fromInt(p.stack & 1);
                     p.state = .ValueBeginNoClosing;
+                    p.after_string_state = State.fromStackElement(@intToEnum(StackElement, p.stack.get(p.stack_used)));
                 },
                 ']' => {
-                    if (p.stack & 1 != array_bit) {
-                        return error.UnexpectedClosingBracket;
-                    }
                     if (p.stack_used == 0) {
                         return error.TooManyClosingItems;
                     }
+                    if (@intToEnum(StackElement, p.stack.get(p.stack_used - 1)) != .Array) {
+                        return error.UnexpectedClosingBracket;
+                    }
 
-                    p.state = .ValueEnd;
-                    p.after_string_state = State.fromInt(p.stack & 1);
-
-                    p.stack >>= 1;
                     p.stack_used -= 1;
-
-                    if (p.stack_used == 0) {
-                        p.complete = true;
-                        p.state = .TopLevelEnd;
+                    switch (p.stack_used) {
+                        0 => {
+                            p.complete = true;
+                            p.state = .TopLevelEnd;
+                        },
+                        else => {
+                            p.state = .ValueEnd;
+                            p.after_string_state = State.fromStackElement(@intToEnum(StackElement, p.stack.get(p.stack_used - 1)));
+                        },
                     }
 
                     token.* = Token.ArrayEnd;
                 },
                 '}' => {
                     // unlikely
-                    if (p.stack & 1 != object_bit) {
-                        return error.UnexpectedClosingBrace;
-                    }
                     if (p.stack_used == 0) {
                         return error.TooManyClosingItems;
                     }
+                    if (@intToEnum(StackElement, p.stack.get(p.stack_used - 1)) != .Object) {
+                        return error.UnexpectedClosingBrace;
+                    }
 
-                    p.state = .ValueEnd;
-                    p.after_string_state = State.fromInt(p.stack & 1);
-
-                    p.stack >>= 1;
                     p.stack_used -= 1;
-
-                    if (p.stack_used == 0) {
-                        p.complete = true;
-                        p.state = .TopLevelEnd;
+                    switch (p.stack_used) {
+                        0 => {
+                            p.complete = true;
+                            p.state = .TopLevelEnd;
+                        },
+                        else => {
+                            p.state = .ValueEnd;
+                            p.after_string_state = State.fromStackElement(@intToEnum(StackElement, p.stack.get(p.stack_used - 1)));
+                        },
                     }
 
                     token.* = Token.ObjectEnd;
@@ -1360,6 +1344,51 @@ test "Value.jsonStringify" {
     }
 }
 
+fn skipValue(tokens: *TokenStream) !void {
+    std.debug.print("\n------\n", .{});
+    const stack_used = tokens.parser.stack_used;
+    while (true) {
+        // std.debug.print("stack_used={}\n", .{tokens.parser.stack_used});
+        const token = (try tokens.next()) orelse return error.UnexpectedEndOfJson;
+        // std.debug.print("token={}\n", .{token});
+        if (tokens.parser.stack_used <= stack_used) break;
+        if (tokens.parser.stack_used < stack_used) unreachable;
+    }
+}
+
+test "skipValue" {
+    try skipValue(&TokenStream.init("false"));
+    try skipValue(&TokenStream.init("true"));
+    try skipValue(&TokenStream.init("null"));
+    try skipValue(&TokenStream.init("42"));
+    try skipValue(&TokenStream.init("42.0"));
+    try skipValue(&TokenStream.init("\"foo\""));
+
+    // basic array
+    try skipValue(&TokenStream.init("[102, 111, 111]"));
+
+    // basic object
+    try skipValue(&TokenStream.init("{}"));
+
+    // basic object with key/value
+    try skipValue(&TokenStream.init("{\"foo\":42}"));
+
+    // mismatched brace/square bracket
+    testing.expectError(error.UnexpectedClosingBrace, skipValue(&TokenStream.init("[102, 111, 111}")));
+
+    // large number of items
+    try skipValue(&TokenStream.init("[" ** 255 ++ "]" ** 255));
+
+    // too many items
+    testing.expectError(error.TooManyNestedItems, skipValue(&TokenStream.init("[" ** 256 ++ "]" ** 256)));
+
+    // { // should fail if no value found (e.g. immediate close of object)
+    //     var tokens = TokenStream.init("[]");
+    //     assert(.ArrayBegin == (try tokens.next()).?);
+    //     testing.expectError(error.UnexpectedToken, skipValue(&tokens));
+    // }
+}
+
 pub const ParseOptions = struct {
     allocator: ?*Allocator = null,
 
@@ -1368,6 +1397,12 @@ pub const ParseOptions = struct {
         UseFirst,
         Error,
         UseLast,
+    } = .Error,
+
+    /// Behaviour when an unknown field is encountered.
+    unknown_field_behaviour: enum {
+        Error,
+        Ignore,
     } = .Error,
 };
 
@@ -1496,7 +1531,19 @@ fn parseInternal(comptime T: type, token: Token, tokens: *TokenStream, options: 
                                 break;
                             }
                         }
-                        if (!found) return error.UnknownField;
+
+                        if (!found) {
+                            // TODO: using switches here segfault the compiler (#2727?)
+                            // switch (options.unknown_field_behaviour) {
+                            //     .Error => return error.UnknownField,
+                            //     .Ignore => try skipValue(tokens),
+                            // }
+                            if (options.unknown_field_behaviour == .Error) {
+                                return error.UnknownField;
+                            } else if (options.unknown_field_behaviour == .Ignore) {
+                                try skipValue(tokens);
+                            }
+                        }
                     },
                     else => return error.UnexpectedToken,
                 }
@@ -1671,6 +1718,15 @@ test "parse" {
 
     testing.expectEqual(@as([3]u8, "foo".*), try parse([3]u8, &TokenStream.init("\"foo\""), ParseOptions{}));
     testing.expectEqual(@as([3]u8, "foo".*), try parse([3]u8, &TokenStream.init("[102, 111, 111]"), ParseOptions{}));
+}
+
+test "parse with ignoring fields" {
+    const T = struct {
+        foo: u32,
+    };
+    testing.expectEqual(@as(T, .{ .foo = 42 }), try parse(T, &TokenStream.init("{\"foo\":42,\"bar\":100}"), ParseOptions{
+        .unknown_field_behaviour = .Ignore,
+    }));
 }
 
 test "parse into enum" {
