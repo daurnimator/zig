@@ -370,7 +370,7 @@ pub const StreamingParser = struct {
                 '}' => {
                     // unlikely
                     if (p.stack & 1 != object_bit) {
-                        return error.UnexpectedClosingBracket;
+                        return error.UnexpectedClosingBrace;
                     }
                     if (p.stack_used == 0) {
                         return error.TooManyClosingItems;
@@ -396,7 +396,7 @@ pub const StreamingParser = struct {
                 },
                 ']' => {
                     if (p.stack & 1 != array_bit) {
-                        return error.UnexpectedClosingBrace;
+                        return error.UnexpectedClosingBracket;
                     }
                     if (p.stack_used == 0) {
                         return error.TooManyClosingItems;
@@ -567,7 +567,7 @@ pub const StreamingParser = struct {
                 },
                 ']' => {
                     if (p.stack & 1 != array_bit) {
-                        return error.UnexpectedClosingBrace;
+                        return error.UnexpectedClosingBracket;
                     }
                     if (p.stack_used == 0) {
                         return error.TooManyClosingItems;
@@ -589,7 +589,7 @@ pub const StreamingParser = struct {
                 '}' => {
                     // unlikely
                     if (p.stack & 1 != object_bit) {
-                        return error.UnexpectedClosingBracket;
+                        return error.UnexpectedClosingBrace;
                     }
                     if (p.stack_used == 0) {
                         return error.TooManyClosingItems;
