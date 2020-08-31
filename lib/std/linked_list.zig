@@ -77,8 +77,10 @@ pub fn SinglyLinkedList(comptime T: type) type {
         /// Arguments:
         ///     new_node: Pointer to the new node to insert.
         pub fn prepend(list: *Self, new_node: *Node) void {
-            new_node.next = list.first;
-            list.first = new_node;
+            @atomicStore(?*Node, &new_node.next, @atomicLoad(?*Node, &list.first, .Monotonic), .Monotonic);
+            while (@cmpxchgWeak(?*Node, &list.first, new_node.next, new_node, .Acquire, .Monotonic)) |old_value| {
+                @atomicStore(?*Node, &new_node.next, old_value, .Monotonic);
+            }
         }
 
         /// Remove a node from the list.
